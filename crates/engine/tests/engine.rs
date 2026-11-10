@@ -914,3 +914,153 @@ async fn pre_restart_heartbeat_cannot_complete_a_recovery() {
         .unwrap();
     assert!(h.incidents("jelly/web").await[0].resolved_at.is_some());
 }
+
+#[tokio::test]
+async fn oversized_batch_is_split_and_only_named_incidents_count_as_delivered() {
+    let long = |prefix: &str, i: usize| format!("{prefix}{i:02}-{}", "x".repeat(90));
+    let services: Vec<(String, Service)> = (0..25)
+        .map(|i| {
+            let checks: Vec<(String, Check)> = (0..5)
+                .map(|c| {
+                    let check = Check {
+                        failure_threshold: Some(1),
+                        ..http(&long("check", c))
+                    };
+                    (format!("c{c}"), check)
+                })
+                .collect();
+            let checks: Vec<(&str, Check)> = checks
+                .iter()
+                .map(|(k, c)| (k.as_str(), c.clone()))
+                .collect();
+            (format!("svc{i:02}"), service(&long("Service", i), &checks))
+        })
+        .collect();
+    let mut cfg = config(&[(
+        "jelly",
+        services
+            .iter()
+            .map(|(k, s)| (k.as_str(), s.clone()))
+            .collect(),
+    )]);
+    cfg.network.max_concurrent = 200; // all 125 checks run in one pass
+    let h = Harness::new(cfg);
+    for i in 0..25 {
+        for c in 0..5 {
+            h.prober.set(&format!("jelly/svc{i:02}/c{c}"), false);
+        }
+    }
+    h.tick().await; // all 25 confirmed down at once
+    assert_eq!(h.snapshot().await.incidents.len(), 25);
+    for _ in 0..10 {
+        h.tick().await; // deliveries continue without advancing time
+    }
+    let texts = h.telegram.texts();
+    assert!(
+        texts.len() > 1,
+        "a 25-item batch with long names must split"
+    );
+    for text in &texts {
+        assert!(
+            text.chars().count() <= 3800,
+            "{} chars",
+            text.chars().count()
+        );
+        assert!(text.contains("failing: check00-") && text.contains(" and 2 more"));
+    }
+    for i in 0..25 {
+        let sid = format!("(jelly/svc{i:02})");
+        let mentions = texts.iter().filter(|t| t.contains(&sid)).count();
+        assert_eq!(mentions, 1, "{sid} must be named in exactly one message");
+        let incident = &h.incidents(&format!("jelly/svc{i:02}")).await[0];
+        assert!(incident.notification_state.starts_with("outage sent"));
+    }
+    assert_safe(&h);
+}
+
+#[tokio::test]
+async fn delayed_summary_describes_stale_evidence_after_restart_honestly() {
+    let mut h = Harness::new(backup_config());
+    h.engine.lock().await.heartbeat(JOB, true).unwrap();
+    h.telegram.reply(
+        429,
+        r#"{"ok":false,"error_code":429,"parameters":{"retry_after":120}}"#,
+    );
+    h.step(361).await; // missed deadline; delivery rate limited until t481
+    assert_eq!(h.telegram.count(), 1);
+    h.clock.advance(9);
+    h.restart(backup_config()); // the Down state is now pre-restart evidence
+    h.step(120).await; // t490: retry while still without current evidence
+    assert_eq!(h.telegram.count(), 2);
+    let text = &h.telegram.texts()[1];
+    assert!(
+        text.contains("OPEN (no current evidence) Backup (nas/backup)"),
+        "{text}"
+    );
+    assert!(!text.contains("DOWN"), "{text}");
+}
+
+#[tokio::test]
+async fn delayed_summary_reports_recovering_instead_of_down() {
+    let h = Harness::new(web_config());
+    h.telegram.reply(
+        429,
+        r#"{"ok":false,"error_code":429,"parameters":{"retry_after":40}}"#,
+    );
+    h.prober.set(WEB, false);
+    h.tick().await;
+    steps(&h, WEB, "FFP").await; // t60 down (rate limited until t100), t90 first pass
+    h.step(10).await; // t100
+    assert_eq!(h.telegram.count(), 2);
+    let text = &h.telegram.texts()[1];
+    assert!(text.contains("RECOVERING Web (jelly/web)"), "{text}");
+    assert!(!text.contains("DOWN"), "{text}");
+}
+
+#[tokio::test]
+async fn delayed_dependent_outage_does_not_claim_a_recovered_dependency_is_down() {
+    let cfg = config(&[(
+        "jelly",
+        vec![
+            ("host", service("Host", &[("ping", http("Ping"))])),
+            (
+                "app",
+                Service {
+                    depends_on: vec!["jelly/host".into()],
+                    ..service("App", &[("web", http("Web"))])
+                },
+            ),
+        ],
+    )]);
+    let h = Harness::new(cfg);
+    let until = start() + chrono::Duration::seconds(200);
+    h.engine
+        .lock()
+        .await
+        .silence("jelly/app", Some(until))
+        .unwrap();
+    h.prober.set("jelly/host/ping", false);
+    h.prober.set("jelly/app/web", false);
+    h.tick().await;
+    h.step(30).await;
+    h.step(30).await; // t60: both down; only Host is notified
+    assert_eq!(h.telegram.count(), 1);
+    assert!(!h.telegram.texts()[0].contains("App"));
+    assert_eq!(
+        h.incidents("jelly/app").await[0].correlated_with.as_deref(),
+        Some("jelly/host")
+    );
+    h.prober.set("jelly/host/ping", true);
+    for _ in 0..5 {
+        h.step(30).await; // host recovered at t120; silence ends at t200
+    }
+    let texts = h.telegram.texts();
+    assert_eq!(texts.len(), 3, "{texts:?}");
+    let app = &texts[2];
+    assert!(app.contains("DOWN App (jelly/app)"), "{app}");
+    assert!(
+        app.contains("Depends on jelly/host, which has since recovered"),
+        "{app}"
+    );
+    assert!(!app.contains("which is down"), "{app}");
+}
