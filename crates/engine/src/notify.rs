@@ -6,16 +6,19 @@
 use crate::store::{fmt_time, ChannelRow, IncidentRow};
 use crate::telegram::{classify, Outcome, TelegramRequest};
 use crate::DEPENDENCY_GROUPING_WAIT_SECONDS;
-use crate::{bounded, display_name, find_check, find_service, Engine, State};
+use crate::{bounded, display_name, find_check, find_service, Engine};
 use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as TimeDelta, Utc};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use vesper_core::secrets;
+use vesper_core::{secrets, Health};
 
 const MAX_ITEMS_PER_MESSAGE: usize = 25;
 const MAX_MESSAGE_CHARS: usize = 3800;
+const MAX_CHECK_NAMES: usize = 3;
+/// Room for the "Vesper: …" header line.
+const HEADER_RESERVE: usize = 80;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Kind {
@@ -140,12 +143,13 @@ impl Engine {
             return Ok(None);
         };
         if let Some(&parent_incident) = self.open.get(parent) {
-            if self
+            // Only dependents that confirmed after the dependency's summary went
+            // out are held; one that existed but did not fit is sent next.
+            let parent_sent = self
                 .store
                 .delivery(parent_incident, recipient)?
-                .outage_sent_at
-                .is_some()
-            {
+                .outage_sent_at;
+            if parent_sent.is_some_and(|sent| incident.opened_at > sent) {
                 return Ok(Some(format!(
                     "held: dependency {parent} outage already notified; sent only if still down after it recovers"
                 )));
@@ -227,15 +231,27 @@ impl Engine {
         Ok(items)
     }
 
-    fn failing_checks(&self, service_id: &str) -> Vec<String> {
-        self.service_checks(service_id)
-            .filter(|(_, rt)| matches!(rt.row.state, State::Down | State::Recovering))
+    /// Names of enabled checks that are Down on current evidence, bounded.
+    fn failing_checks(&self, service_id: &str, now: DateTime<Utc>) -> String {
+        let names: Vec<String> = self
+            .service_checks(service_id)
+            .filter(|(id, rt)| self.check_health(id, rt, now) == Health::Down)
             .filter_map(|(id, _)| {
                 find_check(&self.loaded.config, id)
                     .filter(|(_, c)| c.enabled)
                     .map(|(_, c)| display_name(&c.name, id.rsplit('/').next().unwrap_or(id)))
             })
-            .collect()
+            .collect();
+        let mut out = names
+            .iter()
+            .take(MAX_CHECK_NAMES)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if names.len() > MAX_CHECK_NAMES {
+            out.push_str(&format!(" and {} more", names.len() - MAX_CHECK_NAMES));
+        }
+        out
     }
 
     fn current_name(&self, incident: &IncidentRow) -> String {
@@ -244,74 +260,84 @@ impl Engine {
             .unwrap_or_else(|| bounded(&incident.service_name, 80))
     }
 
-    /// Composes one bounded summary. Contains names, times, durations and a
-    /// dashboard link only; never probe evidence or credentials.
+    /// What is known about an open incident's service right now. Never claims
+    /// Down from stale or pre-restart evidence.
+    fn open_state(&self, service_id: &str, now: DateTime<Utc>) -> &'static str {
+        match self.service_health(service_id, now) {
+            Health::Down => "DOWN",
+            Health::Recovering => "RECOVERING",
+            _ => "OPEN (no current evidence)",
+        }
+    }
+
+    /// Current state of a correlated dependency, for a dependent's line.
+    fn dependency_note(&self, parent: &str, now: DateTime<Utc>) -> String {
+        let state = if !self.open.contains_key(parent) {
+            "which has since recovered".to_string()
+        } else if self.service_health(parent, now) == Health::Down {
+            "which is down".to_string()
+        } else {
+            format!(
+                "which has an open incident, currently {}",
+                self.open_state(parent, now).to_lowercase()
+            )
+        };
+        format!(
+            "Depends on {}, {state} (correlation, not proven cause)",
+            bounded(parent, 80)
+        )
+    }
+
+    /// Composes one bounded summary from current state and returns it with
+    /// the items it actually names. Items that do not fit stay pending. The
+    /// text has names, times, durations and a dashboard link only; never probe
+    /// evidence or credentials.
     fn compose(
         &self,
         items: &[(Kind, IncidentRow)],
         dashboard: &str,
         now: DateTime<Utc>,
-    ) -> String {
-        let outages: Vec<&IncidentRow> = items
+    ) -> (String, Vec<(Kind, i64)>) {
+        let outage_services: Vec<&str> = items
             .iter()
             .filter(|(k, _)| *k == Kind::Outage)
-            .map(|(_, i)| i)
+            .map(|(_, i)| i.service_id.as_str())
             .collect();
-        let grouped_parent = |i: &IncidentRow| {
+        let nested_under = |i: &IncidentRow| {
             i.correlated_with
-                .as_ref()
-                .filter(|p| outages.iter().any(|o| &&o.service_id == p))
-                .cloned()
+                .as_deref()
+                .filter(|p| outage_services.contains(p))
+                .map(str::to_string)
         };
-        let count = |k: Kind| items.iter().filter(|(kind, _)| *kind == k).count();
-        let mut header = vec![];
-        if count(Kind::Outage) > 0 {
-            header.push(format!("{} down", count(Kind::Outage)));
-        }
-        if count(Kind::Reminder) > 0 {
-            header.push(format!("{} still down", count(Kind::Reminder)));
-        }
-        if count(Kind::Recovery) > 0 {
-            header.push(format!("{} resolved", count(Kind::Recovery)));
-        }
-        let mut lines = vec![format!("Vesper: {}", header.join(", "))];
+        // Entries in message order: each top-level item followed by the
+        // dependents grouped under it.
+        let mut entries: Vec<(String, (Kind, i64))> = vec![];
         for (kind, incident) in items {
             let name = self.current_name(incident);
-            let sid = &incident.service_id;
-            match kind {
-                Kind::Outage if grouped_parent(incident).is_some() => {}
+            let sid = bounded(&incident.service_id, 80);
+            let line = match kind {
+                Kind::Outage if nested_under(incident).is_some() => continue,
                 Kind::Outage => {
                     let mut line = format!(
-                        "DOWN {name} ({sid}) since {} ({})",
+                        "{} {name} ({sid}) since {} ({})",
+                        self.open_state(&incident.service_id, now),
                         fmt_display(incident.opened_at),
                         fmt_duration(now - incident.opened_at)
                     );
-                    let failing = self.failing_checks(sid);
+                    let failing = self.failing_checks(&incident.service_id, now);
                     if !failing.is_empty() {
-                        line.push_str(&format!(", failing: {}", failing.join(", ")));
+                        line.push_str(&format!(", failing: {failing}"));
                     }
                     if let Some(p) = &incident.correlated_with {
-                        line.push_str(&format!(
-                            ". Depends on {p}, which is down (correlation, not proven cause)"
-                        ));
+                        line.push_str(&format!(". {}", self.dependency_note(p, now)));
                     }
-                    lines.push(line);
-                    let children: Vec<String> = outages
-                        .iter()
-                        .filter(|c| grouped_parent(c).as_deref() == Some(sid.as_str()))
-                        .map(|c| format!("{} ({})", self.current_name(c), c.service_id))
-                        .collect();
-                    if !children.is_empty() {
-                        lines.push(format!(
-                            "  Also down, depending on {sid} (correlation, not proven cause): {}",
-                            children.join(", ")
-                        ));
-                    }
+                    line
                 }
-                Kind::Reminder => lines.push(format!(
-                    "STILL DOWN {name} ({sid}) for {}",
+                Kind::Reminder => format!(
+                    "STILL {} {name} ({sid}) for {}",
+                    self.open_state(&incident.service_id, now),
                     fmt_duration(now - incident.opened_at)
-                )),
+                ),
                 Kind::Recovery => {
                     let resolved = incident.resolved_at.unwrap_or(now);
                     let verb = match incident.resolution.as_deref() {
@@ -319,29 +345,66 @@ impl Engine {
                         Some("no_checks") => "CLOSED (no enabled checks)",
                         _ => "RECOVERED",
                     };
-                    lines.push(format!(
+                    format!(
                         "{verb} {name} ({sid}) at {} after {}",
                         fmt_display(resolved),
                         fmt_duration(resolved - incident.opened_at)
+                    )
+                }
+            };
+            entries.push((line, (*kind, incident.id)));
+            if *kind == Kind::Outage {
+                for (_, child) in items.iter().filter(|(k, c)| {
+                    *k == Kind::Outage
+                        && nested_under(c).as_deref() == Some(incident.service_id.as_str())
+                }) {
+                    let state = match self.open_state(&child.service_id, now) {
+                        "DOWN" => "Also down".to_string(),
+                        other => format!("Also open ({})", other.to_lowercase()),
+                    };
+                    entries.push((
+                        format!(
+                            "  {state}, depending on {sid} (correlation, not proven cause): {} ({})",
+                            self.current_name(child),
+                            bounded(&child.service_id, 80)
+                        ),
+                        (Kind::Outage, child.id),
                     ));
                 }
             }
         }
-        let link = match items {
-            [(_, only)] => format!("{dashboard}/incidents/{}", only.id),
-            _ => format!("{dashboard}/incidents"),
-        };
-        let mut text = String::new();
-        for line in lines {
-            if text.chars().count() + line.chars().count() + link.len() + 8 > MAX_MESSAGE_CHARS {
-                text.push_str("…\n");
+        // Whole entries only; the first always fits because lines are bounded.
+        let reserve = HEADER_RESERVE + dashboard.chars().count() + "/incidents/".len() + 20;
+        let budget = MAX_MESSAGE_CHARS.saturating_sub(reserve);
+        let mut used = 0;
+        let mut body = vec![];
+        let mut included = vec![];
+        for (line, member) in entries {
+            let len = line.chars().count() + 1;
+            if !body.is_empty() && used + len > budget {
                 break;
             }
-            text.push_str(&line);
-            text.push('\n');
+            used += len;
+            body.push(line);
+            included.push(member);
         }
-        text.push_str(&link);
-        text
+        let count = |k: Kind| included.iter().filter(|(kind, _)| *kind == k).count();
+        let mut header = vec![];
+        if count(Kind::Outage) > 0 {
+            header.push(format!("{} new problem(s)", count(Kind::Outage)));
+        }
+        if count(Kind::Reminder) > 0 {
+            header.push(format!("{} still open", count(Kind::Reminder)));
+        }
+        if count(Kind::Recovery) > 0 {
+            header.push(format!("{} resolved", count(Kind::Recovery)));
+        }
+        let link = match included.as_slice() {
+            [(_, only)] => format!("{dashboard}/incidents/{only}"),
+            _ => format!("{dashboard}/incidents"),
+        };
+        let text = format!("Vesper: {}\n{}\n{link}", header.join(", "), body.join("\n"));
+        (text, included)
     }
 
     pub(crate) fn prepare_delivery(&mut self, now: DateTime<Utc>) -> Result<Option<Delivery>> {
@@ -359,12 +422,12 @@ impl Engine {
         if items.is_empty() {
             return Ok(None);
         }
-        let text = self.compose(&items, &creds.dashboard, now);
+        let (text, included) = self.compose(&items, &creds.dashboard, now);
         let ids = |k: Kind| -> Vec<i64> {
-            items
+            included
                 .iter()
                 .filter(|(kind, _)| *kind == k)
-                .map(|(_, i)| i.id)
+                .map(|(_, id)| *id)
                 .collect()
         };
         Ok(Some(Delivery {
