@@ -394,6 +394,19 @@ impl Store {
             .optional()?)
     }
 
+    pub fn latest_incident(&self, service_id: &str) -> Result<Option<IncidentRow>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT {INCIDENT_COLUMNS} FROM incidents WHERE service_id = ?1 ORDER BY id DESC LIMIT 1"
+                ),
+                [service_id],
+                incident_from_row,
+            )
+            .optional()?)
+    }
+
     pub fn open_incidents(&self) -> Result<Vec<IncidentRow>> {
         let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT {INCIDENT_COLUMNS} FROM incidents WHERE resolved_at IS NULL ORDER BY id"

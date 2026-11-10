@@ -173,7 +173,7 @@ pub(crate) fn classify(result: Result<HttpResponse, String>, secrets: &[&str]) -
             .pointer("/parameters/retry_after")
             .and_then(|v| v.as_u64())
             .unwrap_or(30);
-        return Outcome::RetryAfter(retry.clamp(1, 86_400));
+        return Outcome::RetryAfter(retry.max(1));
     }
     match code {
         400 | 401 | 403 | 404 => Outcome::Rejected(format!("Telegram API {code}: {description}")),
@@ -183,13 +183,14 @@ pub(crate) fn classify(result: Result<HttpResponse, String>, secrets: &[&str]) -
 
 /// Bounds text, strips control characters and removes credential values.
 pub(crate) fn scrub(text: &str, secrets: &[&str]) -> String {
-    let mut out: String = text.chars().filter(|c| !c.is_control()).take(200).collect();
+    // Redact first so truncation can never cut a secret into a leaked prefix.
+    let mut out = text.to_string();
     for secret in secrets {
         if secret.len() >= 4 {
             out = out.replace(secret, "[redacted]");
         }
     }
-    out
+    out.chars().filter(|c| !c.is_control()).take(200).collect()
 }
 
 #[cfg(test)]
@@ -231,6 +232,26 @@ mod tests {
             classify(resp(400, r#"{"ok":false,"error_code":400,"description":"chat 12345:SECRET not found"}"#), &["12345:SECRET"]),
             Outcome::Rejected(d) if !d.contains("SECRET")
         ));
+    }
+
+    #[test]
+    fn redacts_secrets_before_bounding() {
+        let secret = "123456:SECRETTOKENVALUE";
+        // The secret straddles the 200-character bound.
+        let text = format!("{}{secret} tail", "x".repeat(190));
+        let out = scrub(&text, &[secret]);
+        assert!(!out.contains("123456"), "{out}");
+        assert_eq!(out.chars().count(), 200);
+        assert_eq!(
+            classify(
+                resp(
+                    429,
+                    r#"{"ok":false,"error_code":429,"parameters":{"retry_after":172800}}"#
+                ),
+                &[]
+            ),
+            Outcome::RetryAfter(172_800)
+        );
     }
 
     #[test]

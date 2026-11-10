@@ -33,7 +33,7 @@ pub(crate) struct Delivery {
     reminder: Vec<i64>,
 }
 
-struct Credentials {
+pub(crate) struct Credentials {
     token: String,
     chat: String,
     recipient: String,
@@ -70,7 +70,7 @@ fn backoff(failures: u32) -> TimeDelta {
 }
 
 impl Engine {
-    fn credentials(&mut self) -> Option<Credentials> {
+    pub(crate) fn credentials(&mut self) -> Option<Credentials> {
         let telegram = self.loaded.config.telegram.clone();
         let Some(telegram) = telegram else {
             self.recipient = None;
@@ -113,14 +113,62 @@ impl Engine {
             .filter(|_| channel.rejected_revision.as_deref() == Some(self.loaded.revision.as_str()))
     }
 
-    /// A Suspect parent the undelivered outage should wait for, if any.
-    fn grouping_wait(&self, incident: &IncidentRow, now: DateTime<Utc>) -> Option<String> {
-        if now - incident.opened_at >= TimeDelta::seconds(DEPENDENCY_GROUPING_WAIT_SECONDS) {
-            return None;
+    /// Why an undelivered dependent outage is held back for grouping, if it is:
+    /// - a declared dependency is Suspect (bounded wait, so both go together);
+    /// - the correlated dependency's outage was already delivered and it is
+    ///   still down (the dependent is sent only if still down after the
+    ///   dependency recovers, otherwise it stays history);
+    /// - the dependency just recovered and the dependent's active checks have
+    ///   not been rechecked since (bounded wait).
+    fn dependency_hold(
+        &self,
+        incident: &IncidentRow,
+        recipient: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<String>> {
+        let wait = TimeDelta::seconds(DEPENDENCY_GROUPING_WAIT_SECONDS);
+        if now - incident.opened_at < wait {
+            if let Some(p) = self
+                .parents(&incident.service_id)
+                .into_iter()
+                .find(|p| self.service_health(p, now) == vesper_core::Health::Suspect)
+            {
+                return Ok(Some(format!("waiting to group with dependency {p}")));
+            }
         }
-        self.parents(&incident.service_id)
-            .into_iter()
-            .find(|p| self.service_health(p, now) == vesper_core::Health::Suspect)
+        let Some(parent) = &incident.correlated_with else {
+            return Ok(None);
+        };
+        if let Some(&parent_incident) = self.open.get(parent) {
+            if self
+                .store
+                .delivery(parent_incident, recipient)?
+                .outage_sent_at
+                .is_some()
+            {
+                return Ok(Some(format!(
+                    "held: dependency {parent} outage already notified; sent only if still down after it recovers"
+                )));
+            }
+            return Ok(None);
+        }
+        let recovered = self
+            .store
+            .latest_incident(parent)?
+            .and_then(|i| i.resolved_at);
+        if let Some(r) = recovered.filter(|r| now - *r < wait) {
+            let pending = self.service_checks(&incident.service_id).any(|(_, rt)| {
+                rt.active
+                    && rt.kind != vesper_core::CheckKind::Push
+                    && (!rt.current || rt.row.last_checked.is_none_or(|t| t <= r))
+            });
+            if pending {
+                return Ok(Some(format!(
+                    "waiting for recheck after dependency {parent} recovered"
+                )));
+            }
+        }
+        Ok(None)
     }
 
     fn notifications_enabled(&self, service_id: &str) -> bool {
@@ -149,14 +197,14 @@ impl Engine {
             let delivery = self.store.delivery(incident.id, recipient)?;
             match delivery.outage_sent_at {
                 None => {
-                    if self.grouping_wait(&incident, now).is_none() {
+                    if self.dependency_hold(&incident, recipient, now)?.is_none() {
                         items.push((Kind::Outage, incident));
                     }
                 }
                 Some(sent) => {
                     let last = delivery.last_reminder_at.unwrap_or(sent);
                     if let Some(every) = reminder_every {
-                        if incident.acknowledged_at.is_none() && now - last >= crate::secs(every) {
+                        if incident.acknowledged_at.is_none() && now >= crate::after(last, every) {
                             items.push((Kind::Reminder, incident));
                         }
                     }
@@ -350,7 +398,7 @@ impl Engine {
                 };
             }
             Outcome::RetryAfter(seconds) => {
-                let until = now + crate::secs(*seconds);
+                let until = crate::after(now, *seconds);
                 channel.retry_after_until = Some(until);
                 channel.last_error = Some(format!("Telegram rate limit (retry_after {seconds}s)"));
                 tracing::warn!("Telegram rate limited delivery until {}", fmt_time(until));
@@ -413,11 +461,13 @@ impl Engine {
                     ),
                     None => format!("outage sent {}", fmt_time(sent)),
                 },
-                (None, None, _) => match (suppression, self.grouping_wait(incident, now)) {
-                    (Some(reason), _) => format!("suppressed: {reason}"),
-                    (None, Some(parent)) => format!("waiting to group with dependency {parent}"),
-                    (None, None) => "outage pending delivery".into(),
-                },
+                (None, None, _) => {
+                    match (suppression, self.dependency_hold(incident, recipient, now)?) {
+                        (Some(reason), _) => format!("suppressed: {reason}"),
+                        (None, Some(hold)) => hold,
+                        (None, None) => "outage pending delivery".into(),
+                    }
+                }
                 (Some(_), Some(_), Some(r)) => {
                     format!("outage and recovery sent; recovery {}", fmt_time(r))
                 }
