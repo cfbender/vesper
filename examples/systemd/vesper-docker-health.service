@@ -1,0 +1,40 @@
+# Install on the Docker host: /etc/systemd/system/vesper-docker-health.service
+# Pushes Docker daemon/container health to Vesper. Needs the local Docker
+# socket (group docker, root-equivalent); Vesper itself never gets it.
+[Unit]
+Description=Push Docker health to Vesper
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=vesper-push
+Group=vesper-push
+SupplementaryGroups=docker
+Environment=HOME=/nonexistent
+EnvironmentFile=/etc/vesper-push/docker-health.env
+# Root-only token file (0600 root:root) exposed only to this unit.
+LoadCredential=vesper-token:/etc/vesper-push/tokens/docker1-host-containers
+ExecStart=/usr/local/lib/vesper-push/docker-health.sh
+TimeoutStartSec=60
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077

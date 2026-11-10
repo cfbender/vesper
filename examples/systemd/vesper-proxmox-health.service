@@ -1,0 +1,38 @@
+# Install on each Proxmox node: /etc/systemd/system/vesper-proxmox-health.service
+# Pushes node, quorum and guest health to Vesper using a read-only
+# PVEAuditor API token. Runs as a transient unprivileged user.
+[Unit]
+Description=Push Proxmox health to Vesper
+Wants=network-online.target
+After=network-online.target pveproxy.service
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+EnvironmentFile=/etc/vesper-push/proxmox-health.env
+LoadCredential=vesper-token:/etc/vesper-push/tokens/pve1-host-cluster-health
+LoadCredential=pve-token:/etc/vesper-push/pve-api-token
+LoadCredential=pve-ca:/etc/pve/pve-root-ca.pem
+ExecStart=/usr/local/lib/vesper-push/proxmox-health.sh
+TimeoutStartSec=60
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077

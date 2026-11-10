@@ -1,0 +1,4 @@
+# Rejected: machine `nas` is defined both by this file and by the
+# directory machines/nas/. Vesper never merges the two.
+name: NAS
+services: {}

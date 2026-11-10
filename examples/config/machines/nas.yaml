@@ -1,0 +1,35 @@
+name: NAS
+site: Rack
+description: TrueNAS VM with the media and backup pools.
+services:
+  smb:
+    name: SMB shares
+    depends_on:
+      - pve1/host
+    checks:
+      tcp:
+        kind: tcp
+        name: SMB port
+        host: 192.168.20.30
+        port: 445
+  backups:
+    name: Nightly offsite backup
+    description: >-
+      The backup job reports its own exit status with
+      examples/producers/run-and-report.sh after each run.
+    checks:
+      restic:
+        kind: push
+        name: restic to offsite
+        token: {file: push-nas-backups-restic}
+        expected_interval_seconds: 86400   # once a day
+        grace_seconds: 7200                # job may run up to two hours late
+  legacy-ftp:
+    name: Legacy FTP
+    description: Kept in inventory while it is being retired; not executed.
+    paused: true
+    checks:
+      tcp:
+        kind: tcp
+        host: 192.168.20.30
+        port: 21

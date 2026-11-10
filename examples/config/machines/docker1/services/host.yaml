@@ -1,0 +1,20 @@
+name: Docker host
+description: >-
+  SSH answers, and a host-local producer reports whether the Docker daemon is
+  up and the listed containers are running and healthy
+  (examples/producers/docker-health.sh). Vesper itself never mounts the
+  Docker socket.
+depends_on:
+  - pve1/host
+checks:
+  ssh:
+    kind: tcp
+    name: SSH
+    host: 192.168.10.21
+    port: 22
+  containers:
+    kind: push
+    name: Docker daemon and containers
+    token: {file: push-docker1-host-containers}
+    expected_interval_seconds: 60
+    grace_seconds: 90

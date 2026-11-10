@@ -1,0 +1,16 @@
+# Merge into Authelia's configuration.yml under `access_control.rules`.
+# Every user Authelia admits to Vesper is a Vesper administrator: Vesper has
+# no accounts, roles or sessions of its own. Restrict the domain to the
+# people who should be able to edit monitoring, acknowledge and silence.
+#
+# Do NOT add a `bypass` rule for status.example.com or for /api/heartbeat:
+# the heartbeat route in deploy/compose.yaml simply has no Authelia
+# middleware, so Authelia never sees those requests. Any bypass rule here
+# would widen access beyond that single route.
+access_control:
+  default_policy: deny
+  rules:
+    - domain: status.example.com          # CHANGE
+      policy: two_factor
+      subject:
+        - group:vesper-admins             # CHANGE to your admin group

@@ -1,0 +1,17 @@
+# Vesper cannot tell you that Vesper is down. This push check is fed by the
+# independent watchdog (examples/watchdog/vesper-watchdog.sh), which runs on a
+# different machine, posts here, and pings the existing Uptime Kuma push
+# monitor only when Vesper accepted the heartbeat. Kuma, not Vesper, alerts
+# when Vesper or its proxy route is unavailable.
+name: Vesper
+description: This monitor, reached through Traefik's heartbeat route.
+notifications: false   # alerts for Vesper itself come from Kuma
+depends_on:
+  - docker1/host
+checks:
+  watchdog:
+    kind: push
+    name: Watchdog heartbeat
+    token: {file: push-docker1-vesper-watchdog}
+    expected_interval_seconds: 60
+    grace_seconds: 90

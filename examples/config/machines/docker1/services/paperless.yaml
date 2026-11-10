@@ -1,0 +1,14 @@
+name: Paperless-ngx
+description: Document archive. The API check sends a token header.
+depends_on:
+  - docker1/host
+checks:
+  api:
+    kind: http
+    name: Authenticated API
+    url: https://paperless.home.arpa/api/
+    expected_status: 200
+    headers:
+      # Header values are always secret references, never literal strings.
+      # The file holds the complete value, for example "Token 0123abcd...".
+      Authorization: {file: paperless-api-authorization}

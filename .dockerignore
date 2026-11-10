@@ -1,0 +1,16 @@
+# Keep the build context to sources the image needs. Never send local
+# databases, secrets or environment files to the Docker daemon.
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!crates/
+!web/
+web/node_modules/
+web/dist/
+**/target/
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/.env
+**/.env.*

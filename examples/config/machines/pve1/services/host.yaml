@@ -1,0 +1,24 @@
+# Service pve1/host, defined by machines/pve1/services/host.yaml.
+name: Proxmox host
+description: >-
+  The Proxmox web UI answers over TLS signed by the cluster CA, and a push
+  producer on the node reports node, quorum and guest health using a
+  read-only PVEAuditor API token (examples/producers/proxmox-health.sh).
+depends_on:
+  - router/gateway
+checks:
+  web:
+    kind: http
+    name: Proxmox web UI
+    url: https://pve1.home.arpa:8006/
+    expected_status: 200
+    body_contains: Proxmox
+  cluster-health:
+    kind: push
+    name: Node, quorum and guests
+    # The producer sends {"healthy": ...} every 60 s with
+    # Authorization: Bearer <token>. One missed cadence plus grace opens an
+    # incident; one healthy heartbeat recovers it.
+    token: {file: push-pve1-host-cluster-health}
+    expected_interval_seconds: 60
+    grace_seconds: 90

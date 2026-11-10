@@ -1,0 +1,11 @@
+# Rejected: `interval` is not a field (the field is `interval_seconds`).
+# Unknown fields are errors so typos never silently fall back to defaults.
+name: Router
+services:
+  dns:
+    checks:
+      tcp:
+        kind: tcp
+        host: 192.168.10.1
+        port: 53
+        interval: 10
