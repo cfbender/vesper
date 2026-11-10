@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import { errorText } from "../api";
 import { useLive } from "../data";
-import { healthDisplay, localTime, type Tone } from "../format";
+import { fullTime, healthDisplay, localTime, type Tone } from "../format";
 import { Link } from "../router";
 import type { Health, Sample } from "../types";
 
@@ -208,21 +216,56 @@ export function useAction<T>() {
 export function History({ samples, label }: { samples: Sample[]; label: string }) {
   const recent = samples.slice(-40);
   const failed = recent.filter((s) => !s.healthy).length;
+  // Hovered (or tapped) bar and its center, in px from the strip's left edge.
+  const [active, setActive] = useState<{ i: number; x: number } | null>(null);
+  const strip = useRef<HTMLDivElement>(null);
+  // A tapped popover stays until the next tap outside the strip.
+  useEffect(() => {
+    if (!active) return;
+    const away = (e: PointerEvent) => !strip.current?.contains(e.target as Node) && setActive(null);
+    document.addEventListener("pointerdown", away);
+    return () => document.removeEventListener("pointerdown", away);
+  }, [active]);
   if (recent.length === 0) return <p className="note">No samples recorded yet.</p>;
+  const pick = (e: ReactPointerEvent<HTMLDivElement>) => {
+    // Touch captures the pointer to the first bar, so hit-test instead of using e.target.
+    const bar = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("[data-i]");
+    if (!bar || !e.currentTarget.contains(bar)) return;
+    const i = Number(bar.dataset.i);
+    if (active?.i !== i) setActive({ i, x: bar.offsetLeft + bar.offsetWidth / 2 });
+  };
+  const sample = active && recent[active.i];
   return (
     <div className="history-block">
-      <div
-        className="history"
-        role="img"
-        aria-label={`${label}: ${recent.length} recent samples, ${failed} failed`}
-      >
-        {recent.map((s, i) => (
-          <span
-            key={`${s.at}-${i}`}
-            className={s.healthy ? "ok" : "failed"}
-            title={`${localTime(s.at)} · ${s.healthy ? "passed" : "failed"} · ${s.latency_ms} ms`}
-          />
-        ))}
+      <div className="history-wrap">
+        <div
+          ref={strip}
+          className="history"
+          role="img"
+          aria-label={`${label}: ${recent.length} recent samples, ${failed} failed`}
+          onPointerMove={pick}
+          onPointerDown={pick}
+          onPointerLeave={(e) => e.pointerType === "mouse" && setActive(null)}
+        >
+          {recent.map((s, i) => (
+            <span
+              key={`${s.at}-${i}`}
+              data-i={i}
+              className={`${s.healthy ? "ok" : "failed"}${active?.i === i ? " active" : ""}`}
+            />
+          ))}
+        </div>
+        {sample && (
+          <div aria-hidden="true" style={{ "--x": `${active.x}px` } as CSSProperties}>
+            <div className="beat-pop">
+              <strong className={sample.healthy ? "good" : "bad"}>{sample.healthy ? "Passed" : "Failed"}</strong>
+              <time dateTime={sample.at}>{fullTime(sample.at)}</time>
+              <span className="latency">{sample.latency_ms} ms</span>
+              {sample.message && <p>{sample.message}</p>}
+            </div>
+            <span className="beat-arrow" />
+          </div>
+        )}
       </div>
       <div className="legend">
         <span>
