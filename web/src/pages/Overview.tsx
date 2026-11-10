@@ -165,11 +165,14 @@ export function Overview() {
       <PageTitle
         title="Your homelab"
         sub={
-          live
+          snapshot.machines.length === 0
+            ? "Nothing is monitored yet."
+            : live
             ? `${services.length} services on ${snapshot.machines.length} machines. Exceptions first; everything else still in view.`
             : "Showing the last known inventory."
         }
       />
+      {(snapshot.machines.length > 0 || open.length > 0) && (
       <section className="attention" aria-labelledby="incidents-title">
         <div className="sectionline">
           <h2 id="incidents-title">Incidents</h2>
@@ -195,6 +198,7 @@ export function Overview() {
           </p>
         )}
       </section>
+      )}
       {snapshot.machines.length === 0 ? (
         <SetupState snapshot={snapshot} />
       ) : (
