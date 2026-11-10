@@ -1022,7 +1022,8 @@ fn edit_files_writes_only_changes_that_produce_the_planned_config() {
 
     // A plan whose files would not produce its stated configuration, an
     // unsafe path, and a dry run all leave the directory untouched.
-    let e = config::edit_files(r, false, |l, _| Ok((change.clone(), web(l, "Other")))).unwrap_err();
+    let e =
+        config::edit_files(r, false, |l, _, _| Ok((change.clone(), web(l, "Other")))).unwrap_err();
     assert!(e
         .to_string()
         .contains("do not produce the planned configuration"));
@@ -1035,19 +1036,20 @@ fn edit_files_writes_only_changes_that_produce_the_planned_config() {
             path: path.into(),
             content: String::new(),
         }];
-        assert!(config::edit_files(r, false, |l, _| Ok((bad, l.config.clone()))).is_err());
+        assert!(config::edit_files(r, false, |l, _, _| Ok((bad, l.config.clone()))).is_err());
     }
-    let dry = config::edit_files(r, true, |l, _| Ok((change.clone(), web(l, "Web")))).unwrap();
+    let dry = config::edit_files(r, true, |l, _, _| Ok((change.clone(), web(l, "Web")))).unwrap();
     assert_eq!(dry.config.machines["m"].services["web"].name, "Web");
     assert_eq!(snapshot(r), before);
 
-    let saved = config::edit_files(r, false, |l, _| Ok((change.clone(), web(l, "Web")))).unwrap();
+    let saved =
+        config::edit_files(r, false, |l, _, _| Ok((change.clone(), web(l, "Web")))).unwrap();
     assert_eq!(
         read(r, "machines/m/services/web.yaml"),
         "# generated\nname: Web\n"
     );
     assert_eq!(saved, config::load(r).unwrap());
-    config::edit_files(r, false, |l, files| {
+    config::edit_files(r, false, |l, files, _| {
         assert!(files.contains_key("machines/m/services/web.yaml"));
         let mut next = l.config.clone();
         next.machines.get_mut("m").unwrap().services.clear();
@@ -1070,7 +1072,7 @@ fn whole_file_edits_reject_oversized_files_before_writing_even_in_dry_runs() {
     write(d.path(), "_index.yaml", "{}\n");
     let before = snapshot(d.path());
     for dry_run in [true, false] {
-        let error = config::edit_files(d.path(), dry_run, |loaded, _| {
+        let error = config::edit_files(d.path(), dry_run, |loaded, _, _| {
             Ok((
                 vec![config::FileChange::Write {
                     path: "_index.yaml".into(),
@@ -1087,7 +1089,7 @@ fn whole_file_edits_reject_oversized_files_before_writing_even_in_dry_runs() {
     // Exactly the limit is still readable, not conservatively rejected.
     let content = format!("# {}\n{{}}\n", "x".repeat(1024 * 1024 - 6));
     assert_eq!(content.len(), 1024 * 1024);
-    config::edit_files(d.path(), false, |loaded, _| {
+    config::edit_files(d.path(), false, |loaded, _, _| {
         Ok((
             vec![config::FileChange::Write {
                 path: "_index.yaml".into(),
@@ -1134,7 +1136,7 @@ fn whole_file_edits_enforce_tree_limits_before_creating_directories() {
     ];
     for (changes, message) in cases {
         for dry_run in [true, false] {
-            let e = config::edit_files(d.path(), dry_run, |l, _| {
+            let e = config::edit_files(d.path(), dry_run, |l, _, _| {
                 Ok((changes.clone(), l.config.clone()))
             })
             .unwrap_err();
@@ -1144,4 +1146,43 @@ fn whole_file_edits_enforce_tree_limits_before_creating_directories() {
             assert!(!d.path().join("a").exists());
         }
     }
+}
+
+#[test]
+fn labels_file_sits_under_every_other_file_and_saves_write_over_it() {
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path();
+    write(
+        r,
+        config::LABELS_FILE,
+        "network: {allowed_cidrs: [10.0.0.0/8], max_concurrent: 4}\nmachines:\n  m: {name: From labels, site: Rack}\n  only: {name: Only labels}\n",
+    );
+    write(r, "network.yaml", "allowed_cidrs: [10.1.0.0/16]\n");
+    write(r, "machines/m/services/s.yaml", "name: S\n");
+    let l = loaded(r);
+    assert_eq!(l.config.network.allowed_cidrs, ["10.1.0.0/16"]);
+    assert_eq!(l.config.network.max_concurrent, 4);
+    assert_eq!(l.config.machines["m"].name, "From labels");
+    assert_eq!(l.sources["network"], "network.yaml");
+    assert_eq!(l.sources["machines/m"], "machines/m/");
+    assert_eq!(l.sources["machines/only"], config::LABELS_FILE);
+
+    // Renaming a machine named by labels writes the name to its own file,
+    // which then wins; the labels file is never edited.
+    let labels = read(r, config::LABELS_FILE);
+    let m = Machine {
+        name: "Renamed".into(),
+        ..l.config.machines["m"].clone()
+    };
+    let after = config::save_machine(r, &l.revision, "m", &m).unwrap();
+    assert_eq!(read(r, "machines/m/_index.yaml"), "name: Renamed\n");
+    assert_eq!(after.config.machines["m"].site, "Rack");
+    assert_eq!(read(r, config::LABELS_FILE), labels);
+
+    write(
+        r,
+        config::LABELS_FILE,
+        "machines:\n  m:\n    services: {}\n",
+    );
+    assert!(err(r).contains("_labels.yaml: machines.m.services: services cannot be set here"));
 }

@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 pub const INDEX: &str = "_index.yaml";
+use super::LABELS_FILE;
 
 #[derive(Debug, Clone)]
 pub struct DirNode {
@@ -33,7 +34,10 @@ pub enum DirEntry {
 pub struct Assembled {
     pub docs: BTreeMap<String, Doc>,
     pub root: DirNode,
+    /// The configuration value: the files, deep-merged over [`LABELS_FILE`].
     pub value: Value,
+    /// The value of [`LABELS_FILE`], when present.
+    pub labels: Option<Value>,
 }
 
 /// Where a value is defined: inside a YAML file or as a directory.
@@ -148,9 +152,24 @@ impl Assembled {
 
     /// Logical path to defining file for machines, services, checks and the
     /// top-level `defaults`, `network`, `telegram` and `notifications` sections.
+    /// Parts set only by [`LABELS_FILE`] are attributed to it.
     pub fn sources(&self) -> BTreeMap<String, String> {
         let mut out = BTreeMap::new();
         self.collect_sources(self.root(), Pos::Root, "", &mut out);
+        if let Some(Value::Object(labels)) = &self.labels {
+            for (key, value) in labels {
+                let paths = match (key.as_str(), value) {
+                    ("machines", Value::Object(machines)) => {
+                        machines.keys().map(|m| format!("machines/{m}")).collect()
+                    }
+                    ("machines", _) => vec![],
+                    _ => vec![key.clone()],
+                };
+                for path in paths {
+                    out.entry(path).or_insert_with(|| LABELS_FILE.to_string());
+                }
+            }
+        }
         out
     }
 
@@ -187,10 +206,62 @@ fn index_entries(doc: &Doc) -> &[Entry] {
 /// Assembles a tree into raw structure plus a typed configuration.
 pub fn assemble(tree: &Tree) -> Result<(Assembled, Config)> {
     let mut docs = BTreeMap::new();
-    let (root, value) = assemble_dir(tree, &mut docs, "", Pos::Root)?;
-    let assembled = Assembled { docs, root, value };
+    let (root, mut value) = assemble_dir(tree, &mut docs, "", Pos::Root)?;
+    let labels = match tree.files.get(LABELS_FILE) {
+        Some(text) => Some(labels_layer(text)?),
+        None => None,
+    };
+    if let Some(labels) = &labels {
+        value = merge(labels.clone(), value);
+    }
+    let assembled = Assembled {
+        docs,
+        root,
+        value,
+        labels,
+    };
     let config = deserialize(&assembled)?;
     Ok((assembled, config))
+}
+
+/// Parses [`LABELS_FILE`]: a root-shaped mapping that may set anything except
+/// services, which always live in their own files.
+fn labels_layer(text: &str) -> Result<Value> {
+    let doc = yaml::parse(text).map_err(|e| anyhow!("{LABELS_FILE}: {e}"))?;
+    let value = match &doc.root {
+        None => Value::Object(Map::new()),
+        Some(n) if matches!(n.kind, Kind::Map(_)) => yaml::to_json(n),
+        Some(_) => bail!("{LABELS_FILE}: must contain a mapping"),
+    };
+    if let Some(Value::Object(machines)) = value.get("machines") {
+        for (id, machine) in machines {
+            if machine.get("services").is_some() {
+                bail!(
+                    "{LABELS_FILE}: machines.{}.services: services cannot be set here; they belong in machines/<machine>/services/",
+                    safe_key(id)
+                );
+            }
+        }
+    }
+    Ok(value)
+}
+
+/// Deep-merges mappings, with `over` winning for every other value.
+fn merge(base: Value, over: Value) -> Value {
+    match (base, over) {
+        (Value::Object(mut base), Value::Object(over)) => {
+            for (key, value) in over {
+                let merged = match base.remove(&key) {
+                    Some(b) => merge(b, value),
+                    None => value,
+                };
+                base.insert(key, merged);
+            }
+            Value::Object(base)
+        }
+        (base, Value::Null) => base,
+        (_, over) => over,
+    }
 }
 
 fn parse_file(tree: &Tree, docs: &mut BTreeMap<String, Doc>, path: &str) -> Result<()> {
@@ -241,7 +312,7 @@ fn assemble_dir(
         node.index = Some(file);
     }
     for (name, is_dir) in &children {
-        if name == INDEX && !is_dir {
+        if !is_dir && (name == INDEX || pos == Pos::Root && name == LABELS_FILE) {
             continue;
         }
         let rel = join(path, name);

@@ -99,6 +99,7 @@ fn settings(root: &Path, sources: Vec<(&str, Endpoint)>, remove_after: Option<u6
         interval: Duration::from_secs(30),
         remove_after: remove_after.map(Duration::from_secs),
         allowed_secrets: Default::default(),
+        own_container: None,
     }
 }
 
@@ -281,10 +282,11 @@ async fn removal_waits_for_a_grace_period_and_never_follows_errors() {
         allowed_secrets: vec![],
     }];
     let later = chrono::Utc::now() + chrono::Duration::seconds(3601);
-    let loaded = config::edit_files(r, false, |loaded, files| {
+    let loaded = config::edit_files(r, false, |loaded, files, preview| {
         let plan = reconcile::plan(
             loaded,
             files,
+            preview,
             &sources,
             later,
             Some(Duration::from_secs(3600)),
@@ -365,22 +367,42 @@ async fn invalid_services_are_isolated_and_dependencies_resolve_in_one_scan() {
 }
 
 #[tokio::test]
-async fn machines_must_be_directory_backed() {
+async fn missing_machines_become_directories_but_file_machines_are_refused() {
     let root = tempfile::tempdir().unwrap();
     let r = root.path();
     write(r, "machines/nas.yaml", "name: NAS\n");
+    write(r, "machines/host/_index.yaml", "name: Host\n");
     let sockets = tempfile::tempdir().unwrap();
     let docker = FakeDocker::start(sockets.path(), "n");
-    docker.set(&[("app", "running", APP)]);
+    docker.set(&[("app", "running", &APP[2..])]);
     let s = settings(
         r,
         vec![("nas", docker.endpoint()), ("ghost", docker.endpoint())],
         Some(3600),
     );
     let out = reconcile_once(&s, false).await.unwrap();
-    assert!(out.changes.is_empty());
+    assert_eq!(out.report.errors.len(), 1, "{:?}", out.report.errors);
     assert!(out.report.errors[0].contains("nas: discovery writes one file per service, but this machine is defined in machines/nas.yaml"));
-    assert!(out.report.errors[1].contains("ghost: no such machine"));
+    assert_eq!(
+        out.report.changes,
+        ["created ghost/app (machines/ghost/services/app.yaml)"]
+    );
+    let loaded = config::load(r).unwrap();
+    assert_eq!(loaded.sources["machines/ghost"], "machines/ghost/");
+    assert_eq!(loaded.config.machines["ghost"].name, "");
+
+    // Machines written inline cannot gain a directory.
+    let root = tempfile::tempdir().unwrap();
+    write(
+        root.path(),
+        "_index.yaml",
+        "machines:\n  nas: {name: NAS}\n",
+    );
+    let s = settings(root.path(), vec![("ghost", docker.endpoint())], Some(3600));
+    let out = reconcile_once(&s, false).await.unwrap();
+    assert!(out.changes.is_empty());
+    assert!(out.report.errors[0]
+        .contains("ghost: no machine directory, and machines are defined in _index.yaml"));
 }
 
 #[tokio::test]
@@ -517,4 +539,140 @@ async fn oversized_discovery_output_leaves_the_inventory_unchanged() {
         assert_eq!(config::load(r).unwrap(), before);
         assert!(!r.join("machines/docker1/services/app.yaml").exists());
     }
+}
+
+#[tokio::test]
+async fn vesper_labels_configure_an_empty_directory_and_files_take_precedence() {
+    let root = tempfile::tempdir().unwrap();
+    let r = root.path();
+    let sockets = tempfile::tempdir().unwrap();
+    let docker = FakeDocker::start(sockets.path(), "d1");
+    let mut s = settings(r, vec![("docker1", docker.endpoint())], Some(3600));
+    s.own_container = Some(format!("{:0>64}", "vesper"));
+    let own: &[(&str, &str)] = &[
+        ("vesper.network.allowed_cidrs", "10.0.0.0/8, 192.168.1.0/24"),
+        ("vesper.network.max_response_bytes", "2048"),
+        ("vesper.defaults.interval_seconds", "60"),
+        ("vesper.defaults.stale_after_seconds", "180"),
+        ("vesper.machines.docker1.name", "Docker 1"),
+        (
+            "vesper.notifications.dashboard_url",
+            "https://status.example.com",
+        ),
+        ("vesper.notifications.channels.phone.kind", "ntfy"),
+        (
+            "vesper.notifications.channels.phone.topic.file",
+            "ntfy-topic",
+        ),
+        (
+            "vesper.vesper.checks.web.url",
+            "http://10.0.0.2:8080/healthz",
+        ),
+    ];
+    let intruder: &[(&str, &str)] = &[
+        ("vesper.network.allowed_cidrs", "0.0.0.0/0"),
+        ("vesper.app.checks.web.url", "http://10.0.0.3/"),
+    ];
+    docker.set(&[("vesper", "running", own), ("app", "running", intruder)]);
+    let out = reconcile_once(&s, false).await.unwrap();
+    assert!(out.report.errors.is_empty(), "{:?}", out.report.errors);
+    assert_eq!(
+        out.report.changes,
+        [
+            "created _labels.yaml from Vesper's own labels",
+            "created docker1/app (machines/docker1/services/app.yaml)",
+            "created docker1/vesper (machines/docker1/services/vesper.yaml)",
+        ]
+    );
+    assert_eq!(out.report.warnings.len(), 1);
+    assert!(out.report.warnings[0]
+        .starts_with("docker1: container app: label `vesper.network.allowed_cidrs` sets Vesper's own configuration"));
+    let labels = read(r, "_labels.yaml");
+    assert!(
+        labels.contains("allowed_cidrs:\n    - \"10.0.0.0/8\"\n    - \"192.168.1.0/24\"\n"),
+        "{labels}"
+    );
+    assert!(!labels.contains("0.0.0.0/0") && !labels.contains("max_concurrent"));
+    let loaded = config::load(r).unwrap();
+    let c = &loaded.config;
+    assert_eq!(c.network.allowed_cidrs, ["10.0.0.0/8", "192.168.1.0/24"]);
+    assert_eq!(
+        (c.network.max_response_bytes, c.network.max_concurrent),
+        (2048, 16)
+    );
+    assert_eq!(
+        (c.defaults.interval_seconds, c.defaults.stale_after_seconds),
+        (60, 180)
+    );
+    assert_eq!(c.machines["docker1"].name, "Docker 1");
+    assert_eq!(
+        c.notifications.as_ref().unwrap().channels["phone"].kind,
+        "ntfy"
+    );
+    assert_eq!(loaded.sources["network"], "_labels.yaml");
+    assert_eq!(loaded.sources["machines/docker1"], "machines/docker1/");
+    assert!(reconcile_once(&s, false).await.unwrap().changes.is_empty());
+
+    // Hand-written values win field by field; the rest still comes from labels.
+    write(
+        r,
+        "_index.yaml",
+        "network:\n  allowed_cidrs: [10.0.0.0/24]\ndefaults:\n  interval_seconds: 45\n",
+    );
+    write(r, "machines/docker1/_index.yaml", "name: Docker host\n");
+    let loaded = config::load(r).unwrap();
+    let c = &loaded.config;
+    assert_eq!(c.network.allowed_cidrs, ["10.0.0.0/24"]);
+    assert_eq!(c.network.max_response_bytes, 2048);
+    assert_eq!(
+        (c.defaults.interval_seconds, c.defaults.stale_after_seconds),
+        (45, 180)
+    );
+    assert_eq!(c.machines["docker1"].name, "Docker host");
+    assert_eq!(loaded.sources["network"], "_index.yaml");
+    assert!(reconcile_once(&s, false).await.unwrap().changes.is_empty());
+
+    // Labels that leave the merged configuration invalid change nothing.
+    let mut invalid = own.to_vec();
+    invalid[3] = ("vesper.defaults.stale_after_seconds", "10");
+    docker.set(&[
+        ("vesper", "running", &invalid),
+        ("app", "running", intruder),
+    ]);
+    let out = reconcile_once(&s, false).await.unwrap();
+    assert!(out.changes.is_empty());
+    assert!(
+        out.report.errors[0].starts_with(
+            "Vesper's own labels: defaults: stale_after_seconds must be at least interval_seconds"
+        ),
+        "{:?}",
+        out.report.errors
+    );
+    assert_eq!(read(r, "_labels.yaml"), labels);
+
+    // Without configuration labels the generated file goes away.
+    docker.set(&[
+        ("vesper", "running", &own[8..]),
+        ("app", "running", intruder),
+    ]);
+    let out = reconcile_once(&s, false).await.unwrap();
+    assert_eq!(
+        out.report.changes[0],
+        "removed _labels.yaml from Vesper's own labels"
+    );
+    assert!(!r.join("_labels.yaml").exists());
+    assert_eq!(
+        config::load(r).unwrap().config.network.max_response_bytes,
+        1_048_576
+    );
+
+    // A hand-edited file is left alone.
+    docker.set(&[("vesper", "running", own), ("app", "running", intruder)]);
+    reconcile_once(&s, false).await.unwrap();
+    let edited = read(r, "_labels.yaml").replace("2048", "4096");
+    write(r, "_labels.yaml", &edited);
+    let out = reconcile_once(&s, false).await.unwrap();
+    assert!(out.changes.is_empty());
+    assert!(out.report.warnings[0].starts_with("_labels.yaml was edited by hand"));
+    assert_eq!(read(r, "_labels.yaml"), edited);
 }

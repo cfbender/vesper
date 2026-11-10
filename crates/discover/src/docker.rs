@@ -92,9 +92,46 @@ pub async fn containers(endpoint: &Endpoint) -> Result<Vec<Container>> {
                 .first()
                 .map(|n| n.trim_start_matches('/').to_string())
                 .unwrap_or_else(|| s.id.chars().take(12).collect()),
+            id: s.id,
             labels: s.labels.unwrap_or_default(),
         })
         .collect())
+}
+
+/// The ID, or ID prefix, of the container this process runs in: from the
+/// files Docker and Podman bind-mount at /etc/hostname, /etc/hosts and
+/// /etc/resolv.conf, or else from a default hostname, which is the ID's first
+/// 12 characters. `None` outside a container.
+pub fn own_container_id() -> Option<String> {
+    let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+    id_from_mountinfo(&mountinfo).or_else(|| {
+        std::env::var("HOSTNAME")
+            .ok()
+            .filter(|h| h.len() == 12 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+    })
+}
+
+fn id_from_mountinfo(mountinfo: &str) -> Option<String> {
+    mountinfo.lines().find_map(|line| {
+        // Fields: ID, parent ID, major:minor, root, mount point, ...
+        let mut fields = line.split(' ').skip(3);
+        let (root, mount_point) = (fields.next()?, fields.next()?);
+        if !matches!(
+            mount_point,
+            "/etc/hostname" | "/etc/hosts" | "/etc/resolv.conf"
+        ) {
+            return None;
+        }
+        // …/containers/<id>/hostname (Docker) or
+        // …/overlay-containers/<id>/userdata/hostname (Podman).
+        let segments: Vec<&str> = root.split('/').collect();
+        segments.windows(2).find_map(|w| {
+            (w[0].ends_with("containers")
+                && w[1].len() == 64
+                && w[1].bytes().all(|b| b.is_ascii_hexdigit()))
+            .then(|| w[1].to_string())
+        })
+    })
 }
 
 async fn get<S>(stream: S) -> Result<Bytes>
@@ -124,4 +161,25 @@ where
     .await;
     connection.abort();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn own_container_id_comes_from_the_hostname_bind_mounts() {
+        let id = "4f".repeat(32);
+        let docker = format!(
+            "1 0 0:31 / / rw - overlay overlay rw\n\
+             2 1 254:1 /var/lib/docker/containers/{id}/resolv.conf /etc/resolv.conf rw - ext4 /dev/vda1 rw\n"
+        );
+        assert_eq!(super::id_from_mountinfo(&docker), Some(id.clone()));
+        let podman = format!(
+            "7 1 0:44 /containers/storage/overlay-containers/{id}/userdata/hostname /etc/hostname rw - tmpfs tmpfs rw\n"
+        );
+        assert_eq!(super::id_from_mountinfo(&podman), Some(id.clone()));
+        let elsewhere = format!(
+            "2 1 254:1 /var/lib/docker/containers/{id}/data /data rw - ext4 /dev/vda1 rw\n"
+        );
+        assert_eq!(super::id_from_mountinfo(&elsewhere), None);
+    }
 }

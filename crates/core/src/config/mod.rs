@@ -17,6 +17,11 @@ use std::path::Path;
 pub use assemble::sanitize_serde;
 pub use validate::validate;
 
+/// Root file with settings taken from the Vesper container's labels. It
+/// holds a root-shaped mapping without services, and every other file is
+/// deep-merged over it: a value set in any other file wins.
+pub const LABELS_FILE: &str = "_labels.yaml";
+
 /// Maximum length of a machine, service or check ID, in bytes.
 pub const MAX_ID_BYTES: usize = 80;
 
@@ -224,25 +229,55 @@ pub enum FileChange {
 /// missing parent directories are created. External edits during the commit
 /// return [`SaveError::Conflict`]. With `dry_run` the edit is verified the
 /// same way but never written, and the root need not be writable.
+///
+/// The planner's third argument previews changes: it returns the validated
+/// configuration they would produce, or why they cannot be applied.
 pub fn edit_files(
     root: &Path,
     dry_run: bool,
-    plan: impl FnOnce(&LoadedConfig, &BTreeMap<String, String>) -> Result<(Vec<FileChange>, Config)>,
+    plan: impl FnOnce(
+        &LoadedConfig,
+        &BTreeMap<String, String>,
+        &dyn Fn(&[FileChange]) -> Result<LoadedConfig>,
+    ) -> Result<(Vec<FileChange>, Config)>,
 ) -> Result<LoadedConfig> {
     let root = fs::Root::open(root)?;
     let _lock = root.lock(true)?;
     let tree = root.scan()?;
     let current =
         loaded(&tree).context("the configuration on disk is invalid; fix it before editing")?;
-    let (changes, expected) = plan(&current, &tree.files)?;
+    let preview = |changes: &[FileChange]| -> Result<LoadedConfig> {
+        let mut edited = tree.clone();
+        edited.apply(&file_ops(&tree, changes)?);
+        edited.check_bounds()?;
+        loaded(&edited)
+    };
+    let (changes, expected) = plan(&current, &tree.files, &preview)?;
     if changes.is_empty() {
         return Ok(current);
     }
     if !tree.writable && !dry_run {
         return Err(SaveError::ReadOnly.into());
     }
+    let ops = file_ops(&tree, &changes)?;
+    let mut edited = tree.clone();
+    edited.apply(&ops);
+    edited.check_bounds()?;
+    let next = loaded(&edited)?;
+    if next.config != expected {
+        bail!("the edited files do not produce the planned configuration; nothing was written");
+    }
+    if dry_run {
+        return Ok(next);
+    }
+    root.commit(&tree, &ops)?;
+    loaded(&root.scan()?)
+}
+
+/// Checks whole-file changes against `tree` and turns them into operations.
+fn file_ops(tree: &fs::Tree, changes: &[FileChange]) -> Result<Vec<fs::Op>> {
     let mut ops = Vec::new();
-    for change in &changes {
+    for change in changes {
         let path = match change {
             FileChange::Write { path, .. } | FileChange::Delete { path } => path,
         };
@@ -276,18 +311,7 @@ pub fn edit_files(
             }
         }
     }
-    let mut edited = tree.clone();
-    edited.apply(&ops);
-    edited.check_bounds()?;
-    let next = loaded(&edited)?;
-    if next.config != expected {
-        bail!("the edited files do not produce the planned configuration; nothing was written");
-    }
-    if dry_run {
-        return Ok(next);
-    }
-    root.commit(&tree, &ops)?;
-    loaded(&root.scan()?)
+    Ok(ops)
 }
 
 /// Renders a service as standalone YAML: the content of a
@@ -296,6 +320,12 @@ pub fn edit_files(
 pub fn export_service(service: &Service) -> Result<String> {
     let v = serde_json::to_value(service)?;
     Ok(save::document(&schema::shape(schema::Pos::Service, &v)))
+}
+
+/// Renders part of a root mapping, such as the content of [`LABELS_FILE`],
+/// keeping only the keys it sets.
+pub fn export_partial(value: &serde_json::Value) -> String {
+    save::document(&schema::shape(schema::Pos::Root, value))
 }
 
 /// Renders a whole configuration as one root `_index.yaml`.

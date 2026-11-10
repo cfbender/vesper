@@ -34,7 +34,7 @@ checks:
 
 - **Inside the Vesper container.** With `VESPER_DISCOVER_DOCKER` set, `vesper serve` reconciles once before starting checks, then scans Docker every 30 seconds beside the dashboard. The initial scan can take up to the 10-second Docker timeout. There is no extra container. Later file changes reach the scheduler through the normal configuration reload, within about 3 seconds. No API route or UI control reaches Docker.
 - **Read-only use of Docker.** Every scan sends one request per machine, `GET /containers/json?all=true`, which returns container names and labels (not environment variables). Vesper never writes to Docker. The Docker API itself has no read-only mode, though: whoever can open the socket can do anything Docker can. See [Security](#security).
-- **YAML stays the only authority.** Generated services are ordinary files under `machines/<machine>/services/`. Nothing is stored in a database, so turning discovery off leaves every service in place.
+- **YAML stays the only authority.** Generated services are ordinary files under `machines/<machine>/services/`, and [Vesper's own settings from labels](#vespers-own-settings-from-labels) go into `_labels.yaml`. Nothing is stored in a database, so turning discovery off leaves every service and setting in place.
 - **Multi-machine.** `VESPER_DISCOVER_DOCKER` maps each machine ID to one Docker endpoint, such as `docker1=unix:///var/run/docker.sock,docker2=tcp://192.168.1.21:2375`. Services from a host always land on that host's machine. Sources are scanned concurrently, and a problem on one machine does not stop the others.
 - **Safe writes.** Changes are planned under the same configuration lock as the editor's saves and checked against the loader's file-size, total-size, entry-count and directory-depth limits before writing. The whole configuration must assemble and validate in memory; each file replacement is atomic, but a multi-file change is not transactional. A detected concurrent external edit aborts the write and the next scan retries.
 
@@ -52,7 +52,7 @@ A label `vesper.<service>.<path>` sets `<path>` in the service's YAML, with dots
 | `vesper.app.checks.db.host: 10.0.0.5` + `….db.port: "5432"` | a TCP check `db` |
 | `vesper.app.checks.beat.token.file: app-push` | a push check `beat` |
 
-- `<service>` and check IDs follow the usual ID rules. They become the full IDs `docker1/app` and `docker1/app/web`, so keep them stable: history, incidents and silences follow the ID, not the container. Recreating or updating a container with the same labels changes nothing.
+- `<service>` and check IDs follow the usual ID rules. `defaults`, `network`, `notifications` and `machines` are reserved for [Vesper's own settings](#vespers-own-settings-from-labels). They become the full IDs `docker1/app` and `docker1/app/web`, so keep them stable: history, incidents and silences follow the ID, not the container. Recreating or updating a container with the same labels changes nothing.
 - Values are typed by field: `true`/`false` for `paused`, `notifications`, `enabled` and `follow_redirects`; whole numbers for `port`, `expected_status`, `*_seconds` and `*_threshold`; a comma-separated list for `depends_on`; text for everything else, so `name: "1984"` stays text.
 - Without `kind`, a check with `token` is `push`, one with `host` or `port` is `tcp`, and anything else is `http`.
 - **Never put secret values in labels.** Anyone who can list containers can read them. Headers and push tokens accept only `{env: NAME}` or `{file: name}` references; a literal value is rejected and never echoed in messages.
@@ -73,12 +73,35 @@ The machine IDs must also appear in `VESPER_DISCOVER_DOCKER`. Malformed grants p
 
 To revoke a grant, remove it and recreate Vesper while keeping that machine in discovery. Before starting probes, Vesper pauses any still-managed service using an ungranted reference, even if Docker is unavailable. Restoring the grant or supplying safe replacement labels lets discovery restore the declared pause state. Pausing stops future uses; it cannot undo a previous disclosure, so rotate exposed credentials. Hand-written or edited/detached files are administrator-owned and must be changed manually. Disabling discovery or removing a source is **not** revocation: generated YAML remains active.
 
+## Vesper's own settings from labels
+
+Labels on the container Vesper runs in can set everything outside services, so with discovery you need no hand-written YAML at all:
+
+```yaml
+# On the Vesper container, in the same Compose service as VESPER_DISCOVER_DOCKER:
+labels:
+  vesper.network.allowed_cidrs: 192.168.1.0/24, 10.0.0.0/8
+  vesper.defaults.interval_seconds: "60"
+  vesper.machines.docker1.name: Docker host
+  vesper.notifications.dashboard_url: https://status.example.com
+  vesper.notifications.channels.phone.kind: ntfy
+  vesper.notifications.channels.phone.topic.file: ntfy-topic
+```
+
+- Labels under `vesper.defaults.`, `vesper.network.`, `vesper.notifications.` and `vesper.machines.<machine>.` set the field at that path, with the same typing rules as service labels: `allowed_cidrs` is a comma-separated list, and numbers are whole numbers. A channel setting that its kind declares true/false takes `true` or `false`. Secret references work as `….file` and `….env`. Machine labels set `name`, `site`, `description` and `host_service`. Services still come from `vesper.<service>.*` labels, which also work on the Vesper container.
+- Discovery writes these settings into `_labels.yaml` at the configuration root, owned like generated services: it rewrites the file while its marker matches, deletes it once the labels are gone, and leaves it alone after a hand edit.
+- **Your files win.** Every other configuration file is merged over `_labels.yaml` key by key. A value you set by hand replaces the label's, and the label still supplies the fields you did not set. Lists are replaced, not combined: `network.allowed_cidrs` in `_index.yaml` replaces the label's list. Saving a machine in the editor writes to the machine's own file, so the edit takes precedence too.
+- Labels that would make the merged configuration invalid change nothing: the error is reported, and the last `_labels.yaml` stays in effect.
+- **Only Vesper's own labels count.** These keys set the probe allowlist and where notifications go, so Vesper reads them only from its own container. It finds that container from the bind mounts Docker and Podman add for `/etc/hostname`, or else from its default hostname, and it must be on one of the `VESPER_DISCOVER_DOCKER` endpoints. On any other container, these labels are ignored with a warning. Anyone who can change Vesper's own labels can already change its environment and mounts.
+- If Docker cannot be read, or Vesper's container is not among the scanned ones, `_labels.yaml` stays as it is. Settings survive restarts and Docker outages.
+- Labels are read when the container is created. Recreate Vesper (`docker compose up -d vesper`) after changing them.
+
 ## Ownership: what discovery never touches
 
 - It writes only `machines/<machine>/services/<service>.yaml` files that it created, recognized by the marker line and the SHA-256 of the YAML below it.
 - **Hand-written services win.** If labels name a service that already exists without the marker (any file, directory or layout), the labels are ignored with a warning.
 - **Edits detach a file.** Once the YAML of a generated file changes, by hand or by saving it in Vesper's editor, discovery stops updating and removing it and warns while labels still name it. Delete the file to regenerate it from labels, or keep it as a normal hand-managed service.
-- Machines are never created or edited. A machine must exist as a directory, `machines/<machine>/_index.yaml`, with any existing services in their own files under `machines/<machine>/services/`. A machine in a single file (`machines/docker1.yaml`) or with inline services is reported with instructions instead of being restructured.
+- Machines are never edited. A machine that does not exist yet appears as the directory `machines/<machine>/` once its first service is written; name it with `vesper.machines.<machine>.name` or a `machines/<machine>/_index.yaml`. An existing machine must be a directory with its services in their own files under `machines/<machine>/services/`. A machine in a single file (`machines/docker1.yaml`), with inline services, or among machines written inline in `_index.yaml` is reported with instructions instead of being restructured.
 
 ## Stopped, removed and unavailable containers
 
@@ -96,7 +119,7 @@ To revoke a grant, remove it and recreate Vesper while keeping that machine in d
 
 ### The Docker host running Vesper
 
-1. Make sure the machine exists as `config/machines/<machine>/_index.yaml`, and that the configuration directory is writable by the container's UID (10001 by default). Discovery cannot be combined with `VESPER_CONFIG_READ_ONLY=true`; Vesper refuses to start with both.
+1. Mount a configuration directory that is writable by the container's UID (10001 by default). It can start empty: discovery creates the machine directory, and [labels on Vesper's container](#vespers-own-settings-from-labels) can supply the settings. If you write the machine yourself, use `config/machines/<machine>/_index.yaml`. Discovery cannot be combined with `VESPER_CONFIG_READ_ONLY=true`; Vesper refuses to start with both.
 2. In the [reference Compose file](../deploy/compose.yaml), uncomment `VESPER_DISCOVER_DOCKER`, the socket mount and `group_add`, set the machine ID, and set `DOCKER_GID` in `.env` to the output of `stat -c %g /var/run/docker.sock`. The container keeps running as its non-root UID with a read-only root and no capabilities; `group_add` only lets it open the socket.
    ```yaml
    environment:
@@ -161,8 +184,8 @@ Enable discovery in one Vesper per configuration directory, and map each machine
 
 Discovery deliberately covers one source well rather than everything AutoKuma does:
 
-- **Included:** Docker container labels (running or stopped) from local or proxied endpoints, multiple machines, HTTP/TCP/push checks with every per-check field, service names, icons, descriptions, notifications, pausing and `depends_on`.
-- **Not included:** Docker Swarm services, Kubernetes, file sources (Vesper's YAML already is one), templating and snippets, default settings per source, maintenance windows from labels, TLS or client-certificate Docker endpoints, Docker event streaming (scans poll), creating machines, and an indicator in the dashboard. Generated files show their source path in the service page like any other service.
+- **Included:** Docker container labels (running or stopped) from local or proxied endpoints, multiple machines, HTTP/TCP/push checks with every per-check field, service names, icons, descriptions, notifications, pausing and `depends_on`, and Vesper's own settings from its container's labels.
+- **Not included:** Docker Swarm services, Kubernetes, file sources (Vesper's YAML already is one), templating and snippets, default settings per source, maintenance windows from labels, TLS or client-certificate Docker endpoints, Docker event streaming (scans poll), and an indicator in the dashboard. Generated files show their source path in the service page like any other service.
 - Notifications: discovered services default to `notifications: true` like hand-written ones; nothing is sent unless notification channels are configured. Set `vesper.<service>.notifications: "false"` to opt a service out.
 - With Git-managed configuration, generated files appear as new files in the working tree; commit them or keep discovery out of that checkout.
 
@@ -170,7 +193,10 @@ Discovery deliberately covers one source well rather than everything AutoKuma do
 
 | Message | Fix |
 | --- | --- |
-| `docker1: no such machine` | Create `machines/docker1/_index.yaml` (it can hold just `name: …`). |
+| `docker1: no machine directory, and machines are defined in _index.yaml` | Move each machine to `machines/<m>/_index.yaml`, or define `docker1` there yourself. |
+| `label vesper.network.… sets Vesper's own configuration, which is read only from the labels of the container Vesper runs in` | Move the label to the Vesper container. |
+| `Vesper's own labels: …; _labels.yaml was left unchanged` | Fix the named label. The previous `_labels.yaml` stays in effect. |
+| `_labels.yaml was edited by hand` | Delete the file to return control to the labels, or keep editing it by hand. |
 | `discovery writes one file per service, but this machine is defined in …` | Move the machine's fields to `machines/<m>/_index.yaml` and each service to `machines/<m>/services/<s>.yaml`. |
 | `cannot read Docker (… HTTP 403 …)` | A socket proxy refused the request: check its `-allowfrom` and `-allowGET`. |
 | `cannot read Docker (… Permission denied …)` | The container cannot open the socket: set `group_add` to the socket's group ID. |

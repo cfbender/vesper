@@ -94,6 +94,11 @@ services:
       traefik.http.middlewares.vesper-heartbeat-limit.ratelimit.burst: "30"
       traefik.http.middlewares.vesper-heartbeat-body.buffering.maxRequestBodyBytes: "1024"
 
+      # With discovery on, Vesper also reads settings from its own labels
+      # (docs/discovery.md). Files in /config take precedence.
+      # vesper.network.allowed_cidrs: 192.168.1.0/24        # CHANGE
+      # vesper.machines.docker1.name: Docker host
+
 networks:
   vesper-ingress:
     # Example isolated proxy network, also joined by Traefik. Reuse an existing

@@ -20,7 +20,7 @@ Screenshots show the Vesper server probing sample services on a test network.
 
 ## Configure it in YAML
 
-YAML is the only source of configuration. The block below is a complete `_index.yaml`: two machines, four services, five checks.
+Configuration is YAML in one directory. With [label discovery](#optional-services-from-docker-labels) it can come entirely from Docker labels instead. The block below is a complete `_index.yaml`: two machines, four services, five checks.
 
 ```yaml
 network:
@@ -117,7 +117,21 @@ labels:
   vesper.jellyfin.checks.health.body_contains: Healthy
 ```
 
-With `VESPER_DISCOVER_DOCKER=media=unix:///var/run/docker.sock`, `vesper serve` scans the containers every 30 s and writes `machines/media/services/jellyfin.yaml`. The machine must already exist in its own directory, as `machines/media/_index.yaml`, not inline as in the single-file example above. Discovery leaves hand-written and edited files alone.
+With `VESPER_DISCOVER_DOCKER=media=unix:///var/run/docker.sock`, `vesper serve` scans the containers every 30 s and writes `machines/media/services/jellyfin.yaml`, creating the machine's directory if needed. A machine you defined yourself must be in its own directory, as `machines/media/_index.yaml`, not inline as in the single-file example above. Discovery leaves hand-written and edited files alone.
+
+Labels on the Vesper container itself can also set Vesper's settings, so a label-only setup needs no hand-written YAML at all:
+
+```yaml
+# On the Vesper container:
+labels:
+  vesper.network.allowed_cidrs: 192.168.1.0/24, 10.0.0.0/8
+  vesper.machines.media.name: Media server
+  vesper.notifications.dashboard_url: https://status.example.com
+  vesper.notifications.channels.phone.kind: ntfy
+  vesper.notifications.channels.phone.topic.file: ntfy-topic
+```
+
+Discovery writes these into `_labels.yaml`. Your own files are merged over that file and win wherever both set a value. Vesper reads these settings only from its own container, so labels on other containers cannot widen `allowed_cidrs` or reroute notifications.
 
 - It is off unless `VESPER_DISCOVER_DOCKER` is set.
 - It needs writable config. Vesper refuses to start with both `VESPER_DISCOVER_DOCKER` and `VESPER_CONFIG_READ_ONLY=true`.

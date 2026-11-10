@@ -19,7 +19,9 @@ use vesper_core::{secrets, SecretRef};
 pub const USAGE: &str = "vesper discover [--dry-run]
   Reads vesper.* labels from Docker once and brings the generated service
   files under VESPER_CONFIG_DIR in step with them; exits nonzero if anything
-  failed. `vesper serve` does the same continuously when
+  failed. Settings labels on Vesper's own container, such as
+  vesper.network.allowed_cidrs, are written to _labels.yaml, below every
+  other file. `vesper serve` does the same continuously when
   VESPER_DISCOVER_DOCKER is set. See docs/discovery.md.
   --dry-run  show what would change with the file contents; write nothing
 Environment:
@@ -40,6 +42,9 @@ pub struct Settings {
     pub interval: Duration,
     pub remove_after: Option<Duration>,
     pub allowed_secrets: BTreeMap<String, Vec<SecretRef>>,
+    /// The ID, or ID prefix, of the container Vesper runs in, whose
+    /// configuration labels become `_labels.yaml`.
+    pub own_container: Option<String>,
 }
 
 impl Settings {
@@ -112,6 +117,7 @@ impl Settings {
             interval: Duration::from_secs(interval),
             remove_after: remove_after.map(Duration::from_secs),
             allowed_secrets,
+            own_container: docker::own_container_id(),
         }))
     }
 
@@ -147,10 +153,11 @@ pub async fn reconcile_once(settings: &Settings, dry_run: bool) -> Result<Outcom
                 .cloned()
                 .unwrap_or_default();
             let machine = machine.clone();
+            let own = settings.own_container.clone();
             tokio::spawn(async move {
                 let scan = docker::containers(&endpoint)
                     .await
-                    .map(|c| labels::discover(&c))
+                    .map(|c| labels::discover(&c, own.as_deref()))
                     .map_err(|e| format!("{endpoint}: {e:#}"));
                 reconcile::Source {
                     machine,
@@ -169,8 +176,8 @@ pub async fn reconcile_once(settings: &Settings, dry_run: bool) -> Result<Outcom
     let now = chrono::Utc::now();
     tokio::task::spawn_blocking(move || {
         let mut planned = None;
-        config::edit_files(&root, dry_run, |loaded, files| {
-            let plan = reconcile::plan(loaded, files, &sources, now, remove_after);
+        config::edit_files(&root, dry_run, |loaded, files, preview| {
+            let plan = reconcile::plan(loaded, files, preview, &sources, now, remove_after);
             planned = Some((plan.report, plan.changes.clone()));
             Ok((plan.changes, plan.config))
         })?;

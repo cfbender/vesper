@@ -10,7 +10,11 @@ A directory is a mapping. Inside it:
 - `name.yaml` contributes the value of key `name`. The file does not repeat the key.
 - `name/` contributes a mapping at key `name`.
 
-A key may be defined in only one place. If `_index.yaml` and a sibling file, `x.yaml` and `x/`, or an inline mapping and a child file both define a key, loading fails with an error that names both sources. Nothing is deep-merged, and the last file does not win.
+A key may be defined in only one place. If `_index.yaml` and a sibling file, `x.yaml` and `x/`, or an inline mapping and a child file both define a key, loading fails with an error that names both sources. Apart from `_labels.yaml` below, nothing is deep-merged, and the last file does not win.
+
+### `_labels.yaml`
+
+The root may also hold `_labels.yaml`, which [Docker label discovery](../../docs/discovery.md#vespers-own-settings-from-labels) writes from the Vesper container's labels. It is a root-shaped mapping, such as `network: {allowed_cidrs: [10.0.0.0/8]}`, and may set anything except services (`machines.<m>.services`). It is the lowest layer: the rest of the tree is deep-merged over it. Mappings merge key by key, and any other value set elsewhere, including a list, replaces the one in `_labels.yaml`. `sources` names `_labels.yaml` for a section or machine that only it defines. Saves never edit it; a changed value is written to the files above it, where it takes precedence.
 
 Splitting is allowed only at these points:
 
