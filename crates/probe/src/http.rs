@@ -12,17 +12,23 @@ use hyper_util::rt::TokioIo;
 use rustls::{ClientConfig, RootCertStore};
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, ServerName};
+use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncWrite};
+use std::task::{ready, Context, Poll};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::TlsConnector;
 use url::{Host, Position, Url};
 use vesper_core::{Check, NetworkPolicy, SecretRef};
 
 const MAX_REDIRECTS: usize = 5;
-/// Bound on the buffered response head (status line and headers).
+/// Bound on the response head (status line and headers).
 const MAX_HEAD_BYTES: usize = 64 * 1024;
+/// Allowance on top of head and body for TLS handshake and chunked framing.
+const WIRE_SLACK_BYTES: usize = 64 * 1024;
 const USER_AGENT: &str = concat!("vesper-probe/", env!("CARGO_PKG_VERSION"));
 /// Headers the probe owns; configuring them could desynchronize framing or routing.
 const RESERVED_HEADERS: [HeaderName; 6] = [
@@ -111,7 +117,7 @@ pub(crate) async fn check(
         let Some(needle) = check.body_contains.as_deref() else {
             return Ok(format!("HTTP {} from {peer}{via}", status.as_u16()));
         };
-        let body = read_bounded(exchange.response, network.max_response_bytes, peer).await?;
+        let body = read_bounded(exchange, network.max_response_bytes).await?;
         return if contains(&body, needle.as_bytes()) {
             Ok(format!(
                 "HTTP {} from {peer}{via}; body matched",
@@ -189,9 +195,77 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// Hard cap on bytes read from the socket, independent of HTTP parsing.
+struct Capped<T> {
+    inner: T,
+    remaining: usize,
+    tripped: Arc<AtomicBool>,
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for Capped<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if self.remaining == 0 {
+            self.tripped.store(true, Ordering::Relaxed);
+            return Poll::Ready(Err(io::Error::other("response size limit reached")));
+        }
+        let mut scratch = [0u8; 8192];
+        let len = buf.remaining().min(self.remaining).min(scratch.len());
+        let mut limited = ReadBuf::new(&mut scratch[..len]);
+        ready!(Pin::new(&mut self.inner).poll_read(cx, &mut limited))?;
+        let read = limited.filled().len();
+        self.remaining -= read;
+        buf.put_slice(limited.filled());
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for Capped<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        data: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, data)
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// Classifies failures of one connection, reporting the size cap when it tripped.
+#[derive(Clone)]
+struct Wire {
+    peer: SocketAddr,
+    cap: usize,
+    tripped: Arc<AtomicBool>,
+}
+
+impl Wire {
+    fn exceeded(&self) -> Option<Failure> {
+        self.tripped.load(Ordering::Relaxed).then(|| {
+            Failure::new(format!(
+                "response from {} exceeded {} bytes",
+                self.peer, self.cap
+            ))
+        })
+    }
+    fn http(&self, error: &hyper::Error) -> Failure {
+        self.exceeded()
+            .unwrap_or_else(|| http_failure(error, self.peer))
+    }
+}
+
 struct Exchange {
     response: Response<Incoming>,
     peer: SocketAddr,
+    wire: Wire,
     _connection: AbortOnDrop,
 }
 
@@ -213,6 +287,16 @@ async fn fetch(
         .port_or_known_default()
         .ok_or_else(|| Failure::new("URL has no port"))?;
     let (stream, peer) = connect(&target, port, policy).await?;
+    let wire = Wire {
+        peer,
+        cap: MAX_HEAD_BYTES + network.max_response_bytes + WIRE_SLACK_BYTES,
+        tripped: Arc::new(AtomicBool::new(false)),
+    };
+    let stream = Capped {
+        inner: stream,
+        remaining: wire.cap,
+        tripped: wire.tripped.clone(),
+    };
 
     let io: Box<dyn Io> = if url.scheme() == "https" {
         let config = match tls {
@@ -228,7 +312,7 @@ async fn fetch(
         let stream = TlsConnector::from(config)
             .connect(server_name, stream)
             .await
-            .map_err(|error| tls_failure(&error, peer))?;
+            .map_err(|error| wire.exceeded().unwrap_or_else(|| tls_failure(&error, peer)))?;
         Box::new(stream)
     } else {
         Box::new(stream)
@@ -238,7 +322,7 @@ async fn fetch(
         .max_buf_size(MAX_HEAD_BYTES)
         .handshake::<_, Empty<Bytes>>(TokioIo::new(io))
         .await
-        .map_err(|error| http_failure(&error, peer))?;
+        .map_err(|error| wire.http(&error))?;
     let connection = AbortOnDrop(tokio::spawn(async move {
         let _ = connection.await;
     }));
@@ -260,19 +344,33 @@ async fn fetch(
     let response = sender
         .send_request(request)
         .await
-        .map_err(|error| http_failure(&error, peer))?;
+        .map_err(|error| wire.http(&error))?;
+    let head_bytes: usize = response
+        .headers()
+        .iter()
+        .map(|(name, value)| name.as_str().len() + value.len() + 4)
+        .sum();
+    if head_bytes > MAX_HEAD_BYTES {
+        return Err(Failure::new(format!(
+            "response head from {peer} exceeded {} KiB",
+            MAX_HEAD_BYTES / 1024
+        )));
+    }
     Ok(Exchange {
         response,
         peer,
+        wire,
         _connection: connection,
     })
 }
 
-async fn read_bounded(
-    response: Response<Incoming>,
-    limit: usize,
-    peer: SocketAddr,
-) -> Result<Vec<u8>, Failure> {
+async fn read_bounded(exchange: Exchange, limit: usize) -> Result<Vec<u8>, Failure> {
+    let Exchange {
+        response,
+        peer,
+        wire,
+        _connection,
+    } = exchange;
     let too_large = || Failure::new(format!("response body from {peer} exceeded {limit} bytes"));
     let declared = response
         .headers()
@@ -285,7 +383,7 @@ async fn read_bounded(
     let mut body = response.into_body();
     let mut buffer = Vec::new();
     while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(|error| http_failure(&error, peer))?;
+        let frame = frame.map_err(|error| wire.http(&error))?;
         if let Ok(data) = frame.into_data() {
             if buffer.len() + data.len() > limit {
                 return Err(too_large());
@@ -351,4 +449,34 @@ fn http_failure(error: &hyper::Error, peer: SocketAddr) -> Failure {
         error.to_string()
     };
     Failure::new(format!("HTTP exchange with {peer} failed: {reason}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn capped_reads_stop_at_the_wire_limit() {
+        let tripped = Arc::new(AtomicBool::new(false));
+        let mut under = Capped {
+            inner: &b"0123456789"[..],
+            remaining: 11,
+            tripped: tripped.clone(),
+        };
+        let mut out = Vec::new();
+        under.read_to_end(&mut out).await.unwrap();
+        assert_eq!(out, b"0123456789");
+        assert!(!tripped.load(Ordering::Relaxed));
+
+        let mut over = Capped {
+            inner: &b"0123456789"[..],
+            remaining: 4,
+            tripped: tripped.clone(),
+        };
+        let mut out = Vec::new();
+        assert!(over.read_to_end(&mut out).await.is_err());
+        assert_eq!(out, b"0123");
+        assert!(tripped.load(Ordering::Relaxed));
+    }
 }
