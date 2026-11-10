@@ -142,6 +142,12 @@ describe("overview", () => {
     for (const tag of screen.getAllByText("Open (last known)")) expect(tag.closest(".tag")).toHaveClass("stale");
     // Healthy services are not promoted to a failure either.
     expect(screen.getByRole("link", { name: /^Grafana, Healthy \(last known\)/ })).toHaveClass("stale");
+
+    const incident = snapshot.incidents.find((i) => i.service_id === "jelly/jellyfin")!;
+    await act(() => navigate(`/incidents/${incident.id}`));
+    expect(await screen.findByRole("heading", { level: 1, name: "Jellyfin incident is open" })).toBeInTheDocument();
+    expect(screen.getByText("Open (last known)")).toBeInTheDocument();
+    expect(screen.queryByText(/is having an outage/)).not.toBeInTheDocument();
   });
 });
 

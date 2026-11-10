@@ -75,7 +75,7 @@ export function IncidentPage({ id }: { id: number }) {
     <>
       <Crumbs items={crumbs} />
       <PageTitle
-        title={`${incident.service_name} ${open ? "is having an outage" : "outage resolved"}`}
+        title={`${incident.service_name} ${open ? "incident is open" : "incident resolved"}`}
         sub={`${machine?.name ?? m} · incident #${incident.id} · opened ${localTime(incident.opened_at)}`}
         aside={<ToneTag tone={incidentState(incident, live).tone}>{incidentState(incident, live).label}</ToneTag>}
       />
