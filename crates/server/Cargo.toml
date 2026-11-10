@@ -1,0 +1,33 @@
+[package]
+name = "vesper-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vesper"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+vesper-core.workspace = true
+vesper-probe.workspace = true
+vesper-engine.workspace = true
+axum = { version = "0.8", features = ["multipart"] }
+tower-http = { version = "0.6", features = ["fs", "set-header"] }
+ipnet = "2"
+url = "2"
+rand = "0.9"
+sha2 = "0.10"
+subtle = "2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
