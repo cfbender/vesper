@@ -315,6 +315,12 @@ async fn body_reads_are_bounded() {
     let mut status_only = http(url(declared.addr, "http", "/"));
     status_only.body_contains = None;
     assert!(probe(&status_only, &policy).await.healthy);
+
+    // Unvalidated (draft) policies with absurd limits must not overflow.
+    policy.max_response_bytes = usize::MAX;
+    let mut check = http(url(exact.addr, "http", "/"));
+    check.body_contains = Some("needle".into());
+    assert!(probe(&check, &policy).await.healthy);
 }
 
 #[tokio::test]

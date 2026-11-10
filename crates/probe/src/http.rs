@@ -289,7 +289,10 @@ async fn fetch(
     let (stream, peer) = connect(&target, port, policy).await?;
     let wire = Wire {
         peer,
-        cap: MAX_HEAD_BYTES + network.max_response_bytes + WIRE_SLACK_BYTES,
+        // Saturating: unvalidated (draft) policies may carry absurd limits.
+        cap: network
+            .max_response_bytes
+            .saturating_add(MAX_HEAD_BYTES + WIRE_SLACK_BYTES),
         tripped: Arc::new(AtomicBool::new(false)),
     };
     let stream = Capped {
