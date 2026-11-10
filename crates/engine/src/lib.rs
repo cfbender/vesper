@@ -101,13 +101,20 @@ struct Runtime {
     service_id: String,
     kind: CheckKind,
     row: CheckRow,
-    /// Serialized check definition; a change resets streaks.
+    /// Serialized check definition and effective policy; a change resets
+    /// streaks and starts a new monitoring period.
     fingerprint: String,
     /// Enabled and the service is not paused.
     active: bool,
+    /// Unique per runtime instance and definition (never reused, even after
+    /// remove and re-add), so stale in-flight results are recognized.
     generation: u64,
+    /// Whether `row.state` was derived from evidence gathered in the current
+    /// monitoring period. Persisted state from before a restart, re-enable or
+    /// definition change is displayed as stale and can neither open nor
+    /// resolve an incident.
+    current: bool,
     next_due: DateTime<Utc>,
-    in_flight: bool,
     recheck: bool,
     /// Start of the current monitoring period (engine start, add, unpause,
     /// definition change). Push deadlines never reach back before it.
@@ -124,6 +131,11 @@ pub struct Engine {
     prober: Arc<dyn Prober>,
     transport: Arc<dyn TelegramTransport>,
     checks: BTreeMap<String, Runtime>,
+    /// Running probe per check ID with the generation it was started for.
+    /// Owned here, not by the runtime, so runs survive config removal and
+    /// re-add without overlapping or escaping the concurrency bound.
+    in_flight: BTreeMap<String, u64>,
+    next_generation: u64,
     /// Open incident per service ID.
     open: BTreeMap<String, i64>,
     silences: BTreeMap<String, DateTime<Utc>>,
@@ -184,8 +196,20 @@ pub(crate) fn bounded(text: &str, max: usize) -> String {
     out
 }
 
-fn secs(n: u64) -> TimeDelta {
-    TimeDelta::seconds(n.min(i64::MAX as u64 / 1000) as i64)
+/// `t + n` seconds, saturating at the end of year 9999 so huge configured or
+/// Telegram-requested durations are honored without overflow.
+pub(crate) fn after(t: DateTime<Utc>, n: u64) -> DateTime<Utc> {
+    let max = DateTime::<Utc>::from_naive_utc_and_offset(
+        chrono::NaiveDate::from_ymd_opt(9999, 12, 31)
+            .and_then(|d| d.and_hms_opt(23, 59, 59))
+            .expect("valid date"),
+        Utc,
+    );
+    i64::try_from(n)
+        .ok()
+        .and_then(TimeDelta::try_seconds)
+        .and_then(|d| t.checked_add_signed(d))
+        .map_or(max, |r| r.min(max))
 }
 
 /// Whether `now` falls inside the window, repeating weekly in UTC when asked.
@@ -213,23 +237,37 @@ pub fn in_maintenance_window(window: &MaintenanceWindow, now: DateTime<Utc>) -> 
 
 fn push_deadline(row: &CheckRow, baseline: DateTime<Utc>, check: &Check) -> DateTime<Utc> {
     let base = row.last_heartbeat.map_or(baseline, |t| t.max(baseline));
-    base + secs(check.expected_interval_seconds.max(1)) + secs(check.grace_seconds)
+    after(
+        base,
+        check
+            .expected_interval_seconds
+            .max(1)
+            .saturating_add(check.grace_seconds),
+    )
 }
 
 fn push_fresh(row: &CheckRow, check: &Check, now: DateTime<Utc>) -> bool {
     row.last_heartbeat.is_some_and(|t| {
-        now <= t + secs(check.expected_interval_seconds.max(1)) + secs(check.grace_seconds)
+        now <= after(
+            t,
+            check
+                .expected_interval_seconds
+                .max(1)
+                .saturating_add(check.grace_seconds),
+        )
     })
 }
 
 fn active_fresh(row: &CheckRow, policy: &CheckDefaults, now: DateTime<Utc>) -> bool {
     row.last_checked
-        .is_some_and(|t| now - t <= secs(policy.stale_after_seconds))
+        .is_some_and(|t| now <= after(t, policy.stale_after_seconds))
 }
 
-fn reset_streak(row: &mut CheckRow) {
+/// Starts a new streak. A confirmed failure is kept only while its incident
+/// is still open; otherwise old state must not count toward new thresholds.
+fn reset_streak(row: &mut CheckRow, incident_open: bool) {
     row.state = match row.state {
-        State::Down | State::Recovering => State::Down,
+        State::Down | State::Recovering if incident_open => State::Down,
         _ => State::Unknown,
     };
     row.failures = 0;
@@ -312,6 +350,8 @@ impl Engine {
             prober: options.prober,
             transport: options.telegram,
             checks: BTreeMap::new(),
+            in_flight: BTreeMap::new(),
+            next_generation: 1,
             open,
             silences,
             recipient: None,
@@ -320,6 +360,7 @@ impl Engine {
             wake: Arc::new(Notify::new()),
         };
         engine.sync_checks(now, stored)?;
+        engine.credentials(); // recipient key for persisted delivery awareness
         let since = last_alive
             .as_deref()
             .and_then(store::parse_time)
@@ -351,6 +392,7 @@ impl Engine {
         let now = self.clock.now();
         self.loaded = loaded;
         self.sync_checks(now, BTreeMap::new())?;
+        self.credentials();
         self.evaluate_all(now)?;
         self.wake.notify_one();
         Ok(())
@@ -443,6 +485,7 @@ impl Engine {
             .get_mut(check_id)
             .ok_or_else(|| anyhow!("check not found"))?;
         let prev = rt.row.state;
+        rt.current = true;
         rt.row.last_heartbeat = Some(now);
         rt.row.last_checked = Some(now);
         rt.row.latency_ms = None;
@@ -486,9 +529,9 @@ impl Engine {
     }
 
     fn queue_recheck(&mut self, service_id: &str, now: DateTime<Utc>) {
-        for rt in self.checks.values_mut() {
+        for (id, rt) in self.checks.iter_mut() {
             if rt.service_id == service_id && rt.active && rt.kind != CheckKind::Push {
-                if rt.in_flight {
+                if self.in_flight.contains_key(id) {
                     rt.recheck = true;
                 } else {
                     rt.next_due = rt.next_due.min(now);
@@ -508,21 +551,30 @@ impl Engine {
             for (sid, service) in &machine.services {
                 for (cid, check) in &service.checks {
                     let id = format!("{mid}/{sid}/{cid}");
-                    let fingerprint = serde_json::to_string(check)?;
+                    let fingerprint = serde_json::to_string(&(
+                        check,
+                        check.policy(&self.loaded.config.defaults),
+                    ))?;
                     let active = check.enabled && !service.paused;
                     match self.checks.get_mut(&id) {
                         Some(rt) => {
                             if rt.fingerprint != fingerprint {
                                 rt.fingerprint = fingerprint;
                                 rt.kind = check.kind;
-                                rt.generation += 1;
-                                reset_streak(&mut rt.row);
+                                rt.generation = self.next_generation;
+                                self.next_generation += 1;
+                                reset_streak(
+                                    &mut rt.row,
+                                    self.open.contains_key(&format!("{mid}/{sid}")),
+                                );
                                 rt.row.message = "Check definition changed".into();
+                                rt.current = false;
                                 rt.next_due = now;
                                 rt.baseline = now;
                                 self.store.save_check(&id, &rt.row)?;
                             }
                             if active && !rt.active {
+                                rt.current = false;
                                 rt.next_due = now;
                                 rt.baseline = now;
                             }
@@ -538,13 +590,14 @@ impl Engine {
                                     row,
                                     fingerprint,
                                     active,
-                                    generation: 0,
+                                    generation: self.next_generation,
+                                    current: false,
                                     next_due: now,
-                                    in_flight: false,
                                     recheck: false,
                                     baseline: now,
                                 },
                             );
+                            self.next_generation += 1;
                         }
                     }
                     seen.insert(id);
@@ -593,20 +646,13 @@ impl Engine {
         Ok(())
     }
 
-    /// Explicit dependencies: `depends_on` plus the machine's `host_service`.
+    /// Explicitly declared `depends_on` service IDs only. Machine membership
+    /// and `host_service` do not imply a dependency.
     fn parents(&self, service_id: &str) -> Vec<String> {
-        let Some((machine, service)) = find_service(&self.loaded.config, service_id) else {
+        let Some((_, service)) = find_service(&self.loaded.config, service_id) else {
             return vec![];
         };
         let mut parents = service.depends_on.clone();
-        if let Some(host) = &machine.host_service {
-            let mid = service_id.split('/').next().unwrap_or_default();
-            parents.push(if host.contains('/') {
-                host.clone()
-            } else {
-                format!("{mid}/{host}")
-            });
-        }
         parents.retain(|p| p != service_id);
         parents.sort();
         parents.dedup();
@@ -630,7 +676,8 @@ impl Engine {
         let Some((_, check)) = find_check(&self.loaded.config, check_id) else {
             return false;
         };
-        rt.row.state == State::Healthy
+        rt.current
+            && rt.row.state == State::Healthy
             && match rt.kind {
                 CheckKind::Push => push_fresh(&rt.row, check, now),
                 _ => active_fresh(&rt.row, &check.policy(&self.loaded.config.defaults), now),
@@ -643,6 +690,10 @@ impl Engine {
         };
         if service.paused || !check.enabled {
             return Health::Paused;
+        }
+        if !rt.current {
+            let seen = rt.row.last_checked.is_some() || rt.row.last_heartbeat.is_some();
+            return if seen { Health::Stale } else { Health::Unknown };
         }
         match rt.kind {
             CheckKind::Push => {
@@ -688,8 +739,18 @@ impl Engine {
             .filter(|(id, _)| find_check(&self.loaded.config, id).is_some_and(|(_, c)| c.enabled))
             .collect();
         if self.open.contains_key(service_id) {
-            return if enabled.iter().any(|(_, rt)| rt.row.state == State::Down) {
+            let healths: Vec<Health> = enabled
+                .iter()
+                .map(|(id, rt)| self.check_health(id, rt, now))
+                .collect();
+            return if healths.contains(&Health::Down) {
                 Health::Down
+            } else if healths
+                .iter()
+                .any(|h| matches!(h, Health::Stale | Health::Unknown))
+            {
+                // The incident stays open, but there is no current evidence.
+                Health::Stale
             } else {
                 Health::Recovering
             };
@@ -770,7 +831,7 @@ impl Engine {
                 continue;
             }
             enabled += 1;
-            if rt.row.state == State::Down {
+            if rt.current && rt.row.state == State::Down {
                 down.push(display_name(&check.name, id));
             }
             all_fresh_healthy &= self.check_fresh_healthy(id, rt, now);
@@ -848,7 +909,10 @@ impl Engine {
     fn housekeeping(&mut self, now: DateTime<Utc>) -> Result<()> {
         let mut missed = vec![];
         for (id, rt) in self.checks.iter_mut() {
-            if rt.kind != CheckKind::Push || !rt.active || rt.row.state == State::Down {
+            if rt.kind != CheckKind::Push
+                || !rt.active
+                || (rt.current && rt.row.state == State::Down)
+            {
                 continue;
             }
             let Some((_, check)) = find_check(&self.loaded.config, id) else {
@@ -861,6 +925,7 @@ impl Engine {
                 rt.row.successes = 0;
                 rt.row.failures = rt.row.failures.saturating_add(1);
                 rt.row.message = format!("No heartbeat by deadline {}", fmt_time(deadline));
+                rt.current = true;
                 self.store.save_check(id, &rt.row)?;
                 missed.push((
                     id.clone(),
@@ -887,13 +952,12 @@ impl Engine {
     /// Claims due active checks, bounded by `network.max_concurrent` in flight.
     fn take_due(&mut self, now: DateTime<Utc>) -> Vec<Job> {
         let max = self.loaded.config.network.max_concurrent.max(1);
-        let mut running = self.checks.values().filter(|rt| rt.in_flight).count();
+        let mut running = self.in_flight.len();
         let mut due: Vec<(DateTime<Utc>, String)> = self
             .checks
             .iter()
-            .filter(|(_, rt)| {
-                rt.active && rt.kind != CheckKind::Push && !rt.in_flight && rt.next_due <= now
-            })
+            .filter(|(_, rt)| rt.active && rt.kind != CheckKind::Push && rt.next_due <= now)
+            .filter(|(id, _)| !self.in_flight.contains_key(*id))
             .map(|(id, rt)| (rt.next_due, id.clone()))
             .collect();
         due.sort();
@@ -907,7 +971,7 @@ impl Engine {
             };
             let policy = check.policy(&self.loaded.config.defaults);
             let rt = self.checks.get_mut(&id).expect("due check exists");
-            rt.in_flight = true;
+            self.in_flight.insert(id.clone(), rt.generation);
             rt.recheck = false;
             running += 1;
             jobs.push(Job {
@@ -919,8 +983,9 @@ impl Engine {
                 network: self.loaded.config.network.clone(),
                 secrets_root: self.secrets_root.clone(),
                 prober: self.prober.clone(),
+                // vesper-probe bounds itself to at most 300 s; this is a backstop.
                 timeout: Duration::from_secs(
-                    policy.timeout_seconds.max(1) + PROBE_TIMEOUT_MARGIN_SECONDS,
+                    policy.timeout_seconds.clamp(1, 300) + PROBE_TIMEOUT_MARGIN_SECONDS,
                 ),
             });
         }
@@ -929,12 +994,23 @@ impl Engine {
 
     fn complete(&mut self, job: &Job, result: ProbeResult) -> Result<()> {
         let now = self.clock.now();
+        if self.in_flight.get(&job.check_id) == Some(&job.generation) {
+            self.in_flight.remove(&job.check_id);
+        }
+        let incident_open = self
+            .checks
+            .get(&job.check_id)
+            .is_some_and(|rt| self.open.contains_key(&rt.service_id));
         let Some(rt) = self.checks.get_mut(&job.check_id) else {
             return Ok(());
         };
-        rt.in_flight = false;
         if rt.generation != job.generation || !rt.active {
-            return Ok(()); // definition changed or paused meanwhile: discard
+            // Removed, re-added, redefined or paused meanwhile: discard.
+            if rt.recheck {
+                rt.recheck = false;
+                rt.next_due = now;
+            }
+            return Ok(());
         }
         let Some((_, check)) = find_check(&self.loaded.config, &job.check_id) else {
             return Ok(());
@@ -942,10 +1018,12 @@ impl Engine {
         let policy = check.policy(&self.loaded.config.defaults);
         let name = display_name(&check.name, &job.check_id);
         let prev = rt.row.state;
-        if rt.row.last_checked.is_some() && !active_fresh(&rt.row, &policy, now) {
-            // Execution gap: never stitch streaks across stale evidence.
-            reset_streak(&mut rt.row);
+        if !rt.current || !active_fresh(&rt.row, &policy, now) {
+            // New monitoring period or execution gap: never stitch streaks
+            // across a restart or stale evidence.
+            reset_streak(&mut rt.row, incident_open);
         }
+        rt.current = true;
         apply_sample(&mut rt.row, result.healthy, &policy);
         let message = bounded(&result.message, 300);
         rt.row.last_checked = Some(now);
@@ -955,7 +1033,7 @@ impl Engine {
             rt.recheck = false;
             now
         } else {
-            (job.started + secs(policy.interval_seconds.max(1))).max(now)
+            after(job.started, policy.interval_seconds.max(1)).max(now)
         };
         let sample = Sample {
             at: fmt_time(now),
@@ -1076,24 +1154,32 @@ impl Engine {
 
 async fn execute(engine: Arc<Mutex<Engine>>, job: Job) {
     let started = std::time::Instant::now();
-    let result = match tokio::time::timeout(
+    let (prober, id, check, defaults, network, secrets_root, timeout) = (
+        job.prober.clone(),
+        job.check_id.clone(),
+        job.check.clone(),
+        job.defaults.clone(),
+        job.network.clone(),
+        job.secrets_root.clone(),
         job.timeout,
-        job.prober.probe(
-            &job.check_id,
-            &job.check,
-            &job.defaults,
-            &job.network,
-            &job.secrets_root,
-        ),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => ProbeResult {
-            healthy: false,
-            latency_ms: started.elapsed().as_millis() as u64,
-            message: "check exceeded its time limit".into(),
-        },
+    );
+    // A separate task so a panicking probe still releases its in-flight slot.
+    let run = tokio::spawn(async move {
+        tokio::time::timeout(
+            timeout,
+            prober.probe(&id, &check, &defaults, &network, &secrets_root),
+        )
+        .await
+    });
+    let failed = |message: &str| ProbeResult {
+        healthy: false,
+        latency_ms: started.elapsed().as_millis() as u64,
+        message: message.into(),
+    };
+    let result = match run.await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => failed("check exceeded its time limit"),
+        Err(_) => failed("check failed internally"),
     };
     let mut engine = engine.lock().await;
     if let Err(e) = engine.complete(&job, result) {
