@@ -69,27 +69,38 @@ docker inspect -f '{{.Config.Image}}' traefik   # Traefik v3.x
 
 **Record:** the table above, the Docker and Compose versions, and the Traefik image.
 
-## 2. Build the image
+## 2. Pull the published image
 
-No published image is provided. Build from a reviewed commit and tag the image with that commit:
+Install exclusively from `ghcr.io/cfbender/vesper`; no Rust, Node or local image build is required. The published platform is currently **linux/amd64**. Check `docker info --format '{{.Architecture}}'` before continuing; ARM hosts are not supported by this image yet.
 
-```sh
-sudo git clone https://github.com/cfbender/vesper /srv/vesper/src   # or update an existing checkout
-cd /srv/vesper/src && git log -1 --format='%H %s'
-tag=vesper:$(git rev-parse --short HEAD)
-docker build -t "$tag" .
-docker image inspect -f '{{.Config.User}} {{.Config.Healthcheck.Test}}' "$tag"
-```
+Successful `main` CI publishes `latest` and `sha-<full 40-character commit SHA>`. Pull requests, feature branches and Git tags do not publish images. `latest` is a rolling main build, not a versioned release. Choose a reviewed commit tag when needed, then pin the pulled digest so later publishes cannot change an installed version.
 
-Expected: the build succeeds, and inspect prints `10001:10001 [CMD /usr/local/bin/vesper healthcheck]`. The Dockerfile builds the web UI with Node, builds `vesper` with Rust 1.93.1, and copies both into a Debian slim runtime with CA certificates and `tini`.
-
-Optional: run the container smoke test on the build host. It needs `jq` and pulls `curlimages/curl`.
+For a private package, run `docker login ghcr.io -u YOUR_GITHUB_USERNAME` as the same account that will run Docker below. Enter a GitHub personal access token (classic) with `read:packages` and package access at the password prompt (authorize SSO if required). Never put it in a command, configuration file or chat. Package visibility is managed in GitHub; publishing does not make a private package public.
 
 ```sh
-deploy/smoke-test.sh "$tag"
+set -e
+requested=ghcr.io/cfbender/vesper:latest   # or ghcr.io/cfbender/vesper:sha-<full-commit-sha>
+docker pull "$requested"
+image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$requested")
+revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")
+docker image inspect -f '{{.Config.User}} {{.Config.Healthcheck.Test}}' "$image"
 ```
 
-**Record:** the commit hash, the image tag, the inspect output, and the smoke-test summary line if you ran it.
+Expected: the pull succeeds, `image` is `ghcr.io/cfbender/vesper@sha256:…`, `revision` is the full source commit, and inspect prints `10001:10001 [CMD /usr/local/bin/vesper healthcheck]`. The image contains the server, production web UI, CA certificates and `tini`. If a pull fails, check package access and the successful CI publish job; do not substitute a local build.
+
+Fetch matching deployment files, examples and producer scripts from the repository (authenticate Git separately if the repository is private). This checkout is for installation assets, not building:
+
+```sh
+sudo install -d -m 0755 /srv/vesper
+sudo git clone https://github.com/cfbender/vesper /srv/vesper/src   # skip if already cloned
+sudo git -C /srv/vesper/src fetch origin "$revision"
+sudo git -C /srv/vesper/src checkout --detach "$revision"
+cd /srv/vesper/src
+```
+
+Optional: run `deploy/smoke-test.sh "$image"` on this pulled image. It needs `jq` and pulls `curlimages/curl`.
+
+**Record:** the source commit, requested tag, pinned image digest, inspect output, and smoke-test summary if run.
 
 ## 3. Prepare the host directories
 
@@ -97,7 +108,7 @@ deploy/smoke-test.sh "$tag"
 sudo install -d -m 0755 /srv/vesper
 sudo cp /srv/vesper/src/deploy/compose.yaml /srv/vesper/compose.yaml
 sudo cp /srv/vesper/src/deploy/env.example /srv/vesper/.env
-sudo sed -i "s|^VESPER_IMAGE=.*|VESPER_IMAGE=$tag|" /srv/vesper/.env
+sudo sed -i "s|^VESPER_IMAGE=.*|VESPER_IMAGE=$image|" /srv/vesper/.env
 sudo install -m 0600 -o root -g root /srv/vesper/src/deploy/vesper.env.example /srv/vesper/vesper.env
 sudo install -d -m 0750 -o 10001 -g 10001 /srv/vesper/data
 sudo install -d -m 0750 -o root -g 10001 /srv/vesper/secrets
@@ -271,7 +282,7 @@ docker run --rm -i mikefarah/yq:4 '{"machines": (.machines | length),
 
 The export is a valid single-file configuration: saved as `_index.yaml` in an empty directory, it loads to the same configuration. It does not keep the split file layout or comments, so it is a reference and a disaster-recovery copy, not a replacement for the real tree.
 
-Sanity-check the build against the rejection cases too:
+Sanity-check the published image against the rejection cases too:
 
 ```sh
 for d in /srv/vesper/src/examples/invalid/*/; do
@@ -498,18 +509,22 @@ Keep Kuma and all its monitors running unchanged. Run both side by side for at l
 
 ## 16. Upgrades
 
+Select a published tag (or digest) from a successful main CI run, pull it, and retain the old digest for rollback. Never rebuild locally for an upgrade. These commands use the `vesper_cli` function from phase 7:
+
 ```sh
-cd /srv/vesper/src && sudo git fetch && sudo git checkout <reviewed tag or commit>
-new=vesper:$(git rev-parse --short HEAD); docker build -t "$new" .
+set -e
+requested='ghcr.io/cfbender/vesper:sha-<full-commit-sha>'   # replace with the reviewed published tag
+docker pull "$requested"
+new=$(docker image inspect --format '{{index .RepoDigests 0}}' "$requested")
 old=$(sed -n 's/^VESPER_IMAGE=//p' /srv/vesper/.env)
 # Validate the current config with the NEW image before switching:
 sudo sed -i "s|^VESPER_IMAGE=.*|VESPER_IMAGE=$new|" /srv/vesper/.env && vesper_cli validate || {
-  sudo sed -i "s|^VESPER_IMAGE=.*|VESPER_IMAGE=$old|" /srv/vesper/.env; echo "validation failed; staying on $old"; }
+  sudo sed -i "s|^VESPER_IMAGE=.*|VESPER_IMAGE=$old|" /srv/vesper/.env; echo "validation failed; staying on $old"; exit 1; }
 ```
 
-Before running `docker compose up -d` with the new image, take a data backup (phase 17), and keep the old image (do not prune it). Afterwards, repeat the checks in phases 9 and 10 and confirm the watchdog stays up.
+Stop if pull, inspect or validation fails. Fetch installation assets at the new image's `org.opencontainers.image.revision` as in phase 2, and review changes to the runbook and Compose example without overwriting local proxy settings or secrets. Before running `docker compose up -d` with the new image, take a data backup (phase 17), and keep the old image (do not prune it). Afterwards, repeat the checks in phases 9 and 10 and confirm the watchdog stays up.
 
-**Rollback:** set `VESPER_IMAGE` back to the old tag and run `docker compose up -d`. If the new version migrated the database, an older binary may not open it. In that case, also restore the pre-upgrade backup, and accept that history recorded since the upgrade is lost.
+**Rollback:** set `VESPER_IMAGE` back to the old digest and run `docker compose up -d`. If the new version migrated the database, an older binary may not open it. In that case, also restore the pre-upgrade backup, and accept that history recorded since the upgrade is lost.
 
 ## 17. Backups and restore
 
@@ -566,7 +581,7 @@ Then confirm that the incident history and recent samples from before the backup
 
 Report these items:
 
-- The commit and image tag.
+- The source commit, requested GHCR tag and pinned image digest.
 - The configuration mode.
 - The inventory counts, and the Kuma mapping with any gaps.
 - The validate output.

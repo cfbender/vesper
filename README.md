@@ -13,12 +13,18 @@ Vesper is a homelab status monitor: one Rust/Axum process with a bundled React U
 
 It checks HTTP status and body substrings, TCP connects, and push heartbeats with per-check bearer tokens. Docker and Proxmox health arrive as pushed heartbeats from small producers on those hosts. Vesper never mounts the Docker socket or runs remote commands. It has no built-in login, no ICMP, DNS or certificate checks, and no high availability. It cannot report its own outage, so pair it with the [watchdog](examples/watchdog) and an independent monitor such as Uptime Kuma.
 
-## Build
+## Install from GHCR
+
+Use the published **`ghcr.io/cfbender/vesper`** image (currently `linux/amd64`), not a local build. Successful `main` CI publishes `latest` and `sha-<full 40-character commit SHA>` tags. `latest` follows the most recently published main build; pin its digest for repeatable deployments. There are no release-version tags yet.
+
+If the package is private, first run `docker login ghcr.io -u YOUR_GITHUB_USERNAME` and enter a GitHub personal access token (classic) with `read:packages` and access to the package at the password prompt. Do not put the token in a command or `.env`.
 
 ```sh
-docker build -t vesper:$(git rev-parse --short HEAD) .
-deploy/smoke-test.sh vesper:$(git rev-parse --short HEAD)   # optional; needs docker and jq
+docker pull ghcr.io/cfbender/vesper:latest
+docker image inspect --format '{{index .RepoDigests 0}}' ghcr.io/cfbender/vesper:latest
 ```
+
+Use that digest as `VESPER_IMAGE` with the [reference Compose deployment](deploy/compose.yaml). Follow the [installation runbook](docs/installation.md) for proxy authentication, secrets, inventory and verification. Do not publish the backend port directly.
 
 The image runs `vesper serve` by default. Other commands: `vesper validate` checks the configuration under `VESPER_CONFIG_DIR`, `vesper export` prints the assembled configuration as one block YAML document with secret references only, and `vesper healthcheck` probes the local liveness endpoint.
 
@@ -48,7 +54,14 @@ VESPER_STATIC_DIR=$PWD/web/dist \
 
 The example inventory points at `192.168.x` addresses and secret files that do not exist locally. Expect its checks to fail with explanatory messages until you point them at your own targets.
 
-Checks before sending a change: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, plus the web package's own scripts. CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs those, shellcheck, unit verification and the container smoke test. It never publishes images or deploys.
+For development-only container builds and smoke tests:
+
+```sh
+docker build -t vesper:dev .
+deploy/smoke-test.sh vesper:dev
+```
+
+Checks before sending a change: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, plus the web package's own scripts. [CI](.github/workflows/ci.yml) runs those, shellcheck, unit verification and the container smoke test. Only successful pushes to `main` in this repository call the [GHCR publisher](.github/workflows/publish-image.yml), which smoke-tests its exact image before pushing with the built-in `GITHUB_TOKEN`. Pull requests and other branches never publish. No workflow deploys.
 
 ## License
 

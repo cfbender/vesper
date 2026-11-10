@@ -1,0 +1,57 @@
+name: Publish image
+
+# Called only after the complete CI suite passes. No PR or manual entry point.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'cfbender/vesper'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/cfbender/vesper
+      REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v4
+      - name: Build the image to publish
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: |
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=min
+      - name: Smoke-test the exact image before publishing
+        run: deploy/smoke-test.sh "$IMAGE:sha-$REVISION"
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish commit tag, then latest
+        run: |
+          docker push "$IMAGE:sha-$REVISION"
+          docker push "$IMAGE:latest"
+          digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE:sha-$REVISION")
+          docker pull "$digest"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$digest")" = "$REVISION"
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            -v "$PWD/examples/config:/config:ro" "$digest" validate
+          echo "Published \`$IMAGE:sha-$REVISION\` and \`$IMAGE:latest\` (linux/amd64)." >> "$GITHUB_STEP_SUMMARY"
+          echo "Pin deployments to \`$digest\`." >> "$GITHUB_STEP_SUMMARY"

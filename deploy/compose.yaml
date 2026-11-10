@@ -22,7 +22,7 @@ name: vesper
 
 services:
   vesper:
-    image: ${VESPER_IMAGE:?set VESPER_IMAGE in .env, e.g. vesper:abc1234}
+    image: ${VESPER_IMAGE:?set VESPER_IMAGE in .env to a ghcr.io/cfbender/vesper tag or digest}
     container_name: vesper
     restart: unless-stopped
     user: "10001:10001"
