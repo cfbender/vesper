@@ -2,5 +2,5 @@
 # Vesper container itself.
 name: docker1
 site: Rack
-description: Docker host VM (runs Traefik, Authelia, Vesper and media apps).
+description: Docker host VM (runs the authenticated reverse proxy, Vesper and media apps).
 host_service: host   # dependents declare depends_on: [docker1/host]

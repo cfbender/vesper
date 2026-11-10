@@ -9,7 +9,7 @@
 #   VESPER_CHECK_ID           e.g. docker1/host/containers
 #   VESPER_DOCKER_CONTAINERS  space-separated container names that must be
 #                             running (and healthy, if they define a
-#                             HEALTHCHECK), e.g. "traefik authelia jellyfin"
+#                             HEALTHCHECK), e.g. "traefik vesper jellyfin"
 #   VESPER_URL, VESPER_TOKEN_FILE, VESPER_CA_FILE  as for vesper-push.sh
 #
 # Healthy means: `docker info` answers, and every listed container exists, is

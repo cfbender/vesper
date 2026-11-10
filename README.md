@@ -2,7 +2,9 @@
 
 Vesper is a homelab status monitor: one Rust/Axum process with a bundled React UI, SQLite history, YAML as the only configuration authority, and Telegram notifications. It runs HTTP(S), TCP and push-heartbeat checks across your machines and groups them into services and incidents. It runs behind an authenticating reverse proxy. Vesper has no accounts of its own, so every user the proxy admits is an administrator.
 
-- **Install:** [docs/installation.md](docs/installation.md) is a step-by-step runbook, written so an agent can follow it. It covers YAML layout, secrets, validation, Traefik and Authelia, producers, Telegram, drills, the watchdog, upgrades and backups.
+**Authelia is optional, not a dependency.** Use your preferred authentication proxy, or HTTPS BasicAuth at the reverse proxy for a small admin-only installation. The [proxy contract](docs/security.md#reverse-proxy-and-authentication-contract) explains the required protections. The runbook provides a Traefik reference path and a recommended Authelia option for SSO/MFA; other proxies can meet the same contract.
+
+- **Install:** [docs/installation.md](docs/installation.md) is a step-by-step runbook, written so an agent can follow it. It covers YAML layout, secrets, validation, external authentication, producers, Telegram, drills, the watchdog, upgrades and backups.
 - **Security model:** [docs/security.md](docs/security.md)
 - **Configuration reference:** [crates/core/CONFIGURATION.md](crates/core/CONFIGURATION.md), including supported layouts and save guarantees.
 - **Architecture and API contract:** [docs/architecture.md](docs/architecture.md)

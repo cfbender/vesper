@@ -77,7 +77,12 @@ jobs:
       - name: shellcheck
         run: shellcheck -x examples/producers/*.sh examples/watchdog/*.sh deploy/smoke-test.sh
       - name: Compose file renders
-        run: docker compose --env-file deploy/env.example -f deploy/compose.yaml config --quiet
+        run: |
+          VESPER_AUTH_MIDDLEWARE=example-auth@file docker compose --env-file deploy/env.example -f deploy/compose.yaml config --quiet
+          if VESPER_AUTH_MIDDLEWARE= docker compose --env-file deploy/env.example -f deploy/compose.yaml config --quiet; then
+            echo "::error::Compose accepted a missing authentication middleware"
+            exit 1
+          fi
       - name: systemd units verify
         run: |
           sudo install -d /usr/local/lib/vesper-push

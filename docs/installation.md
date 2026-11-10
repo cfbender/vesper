@@ -1,6 +1,6 @@
 # Installing Vesper: an agent runbook
 
-This runbook takes an operator, or an agent working for one, from a clean Docker host to a verified Vesper deployment. Vesper runs behind an existing Traefik v3 and Authelia setup, next to the existing Uptime Kuma. Each phase names the commands to run, the result to expect and what to record. Do the phases in order. A phase is done only when its **Record** items are filled in from real output.
+This runbook takes an operator, or an agent working for one, from a clean Docker host to a verified Vesper deployment. Vesper needs an authenticating reverse proxy, not a particular authentication provider. The concrete reference path uses Traefik v3 with your chosen auth middleware; phase 8 covers proxy-native BasicAuth and the suggested Authelia SSO/MFA option. Other proxies can satisfy the same [security contract](security.md#reverse-proxy-and-authentication-contract), but their configuration is not supplied here. If comparing with an existing Uptime Kuma installation, keep it running. Each phase names the commands to run, the result to expect and what to record. Do the phases in order. A phase is done only when its **Record** items are filled in from real output.
 
 Read [security.md](security.md) first. The layout and field rules in this runbook follow [architecture.md](architecture.md) and `crates/core/src/model.rs`.
 
@@ -8,7 +8,7 @@ Read [security.md](security.md) first. The layout and field rules in this runboo
 
 - **Never print, paste or log secret values.** That covers bot tokens, push tokens, API tokens, chat IDs, Kuma push URLs and header values. Create secret files with the commands below, which never echo them. When the user must supply a secret, have them type it into a terminal prompt (`read -rs`), not into the chat.
 - **Report only what you observed.** Copy decisive output verbatim. If you could not run a step, write "not verified" and the reason. Never write "Telegram works" unless a person confirmed that the test message arrived (phase 12).
-- **Change nothing outside the scope you were given.** Do not stop, reconfigure or delete Uptime Kuma or its monitors. Do not publish Vesper's port, mount the Docker socket into Vesper, add Authelia bypass rules, or run Vesper as root. Ask before changing the user's shared Traefik or Authelia configuration, firewall or DNS.
+- **Change nothing outside the scope you were given.** Do not stop, reconfigure or delete Uptime Kuma or its monitors. Do not publish Vesper's port, mount the Docker socket into Vesper, widen the scoped heartbeat authentication exception, or run Vesper as root. Ask before changing the user's shared proxy or authentication configuration, firewall or DNS.
 - **Stop and ask** when a fact in phase 1 is unknown, when a check below gives an unexpected result, or when a step would affect other services.
 
 ## 0. Scope and limitations
@@ -23,7 +23,7 @@ It does not do the following:
 
 - **No native Docker or Proxmox polling.** Vesper never touches the Docker socket, SSH or remote command execution. Docker and Proxmox health arrive as pushed heartbeats from small producers on those hosts (phase 11).
 - **No ICMP ping, DNS-record or certificate-expiry checks**, and no other check types.
-- **No built-in login, users, roles, OIDC or sessions.** Authelia (or another forward-auth proxy) is the only access control. Everyone it admits is a full administrator.
+- **No built-in login, users, roles, OIDC or sessions.** Authentication and administrator authorization belong to the external proxy/auth layer. Authelia is optional. Everyone admitted to Vesper's management interface is a full administrator.
 - **One instance, one vantage point.** Vesper sees the network from its container's egress network only. It is not highly available, and it cannot report its own outage; that is the job of the independent watchdog (phase 14).
 - **Telegram is the only notifier.** The Bot API accepting a message is not a read receipt, and network ambiguity can cause duplicate sends.
 - **Dependency grouping is configured, not inferred.** Only a service's own `depends_on` list creates a parent dependency. `host_service` marks which service probes the machine itself; it does not make the machine's other services depend on it. A correlated failure is not a proven root cause.
@@ -50,7 +50,7 @@ Ask the user for anything you cannot read from the host. Record every item.
 | Public origin (exact `https://host`, no path) | `https://status.example.com` |
 | Docker host and repository checkout path | `docker1`, `/srv/vesper/src` |
 | Traefik container name, TLS entrypoint, certificate resolver | `traefik`, `websecure`, `letsencrypt` |
-| Authelia forward-auth middleware name and admin group | `authelia@docker`, `vesper-admins` |
+| Authentication middleware and allowed administrators | `vesper-auth@file` (BasicAuth), or `authelia@file` with group `vesper-admins` |
 | A free private /28 for the ingress network | `172.31.250.0/28` |
 | LAN CIDRs Vesper may probe | `192.168.10.0/24, 192.168.20.0/24` |
 | Private CA bundle (if internal services use one) | `/etc/ssl/homelab-root.pem` |
@@ -114,7 +114,7 @@ sudo install -d -m 0750 -o 10001 -g 10001 /srv/vesper/data
 sudo install -d -m 0750 -o root -g 10001 /srv/vesper/secrets
 ```
 
-Edit `/srv/vesper/compose.yaml` and change every line marked `CHANGE`: the origin in `VESPER_PUBLIC_URL` and both `Host()` rules, the ingress CIDR in `VESPER_TRUSTED_PROXIES`, the entrypoints, the certificate resolver, and the Authelia middleware name. Do not add `ports:`.
+Edit `/srv/vesper/compose.yaml` and change every line marked `CHANGE`: the origin in `VESPER_PUBLIC_URL` and both `Host()` rules, the ingress CIDR in `VESPER_TRUSTED_PROXIES`, the entrypoints and the certificate resolver. Set `VESPER_AUTH_MIDDLEWARE` in `/srv/vesper/.env` to the existing authentication middleware you choose in phase 8. Compose deliberately rejects an empty value; do not remove the middleware label to get past this check. Do not add `ports:`.
 
 `/data` holds `vesper.db` and its `-wal` and `-shm` files. Keep it on local disk, not NFS or SMB.
 
@@ -294,7 +294,9 @@ done
 
 **Record:** the verbatim `validate` output and exit code, the export counts, and the result of the rejection loop.
 
-## 8. Networks, Traefik and Authelia
+## 8. Networks, reverse proxy and authentication
+
+Use an authentication layer that authorizes only Vesper administrators. A working login alone is insufficient if it admits everyone with an account. Do not deploy a public unauthenticated dashboard, and do not use `VESPER_DEV_MODE` to avoid configuring protection. The following is the Traefik reference path; for another proxy, implement the [provider-neutral contract](security.md#reverse-proxy-and-authentication-contract) and run the same access checks in phase 10.
 
 Create the private ingress network once. It is internal (no internet) and shared only with Traefik:
 
@@ -305,16 +307,54 @@ docker network connect vesper-ingress traefik     # also add it to Traefik's own
 
 Vesper is attached to two networks, and neither publishes a port on the host. `vesper-ingress` is internal: it has no route out and carries only Traefik's requests. The project's own `egress` bridge (named `vesper_egress` by Compose) gives Vesper ordinary outbound NAT access, to LAN check targets within `allowed_cidrs` and to `api.telegram.org:443` for notifications. Allow both in the host firewall if it filters forwarded traffic. Containers outside this project are not attached to `egress`, and the host reaches Vesper there only as an untrusted peer.
 
-Every peer on `vesper-ingress` is trusted as the authenticating proxy (`VESPER_TRUSTED_PROXIES`). Attach nothing else to it except the short-lived admin client in phase 9. Peers on any other network get 403 from Vesper.
+Every peer on `vesper-ingress` is trusted as the authenticating proxy (`VESPER_TRUSTED_PROXIES`). Attach nothing else to it except the short-lived admin client in phase 9. The authentication service, if separate, communicates with Traefik on another network and does not need backend access. Management requests from peers on any other network get 403 from Vesper, even with spoofed identity or forwarding headers.
 
 The labels in `compose.yaml` define two routers:
 
-- `vesper`: `Host(status.example.com)` with the Authelia middleware. It covers the UI, the API and `/healthz`.
-- `vesper-heartbeat`: `POST` to exactly `^/api/heartbeat/<id>/<id>/<id>$`, with priority 1000, without Authelia, and with a rate limit and a 1 KiB body limit. Vesper still requires the check's bearer token on this route.
+- `vesper`: `Host(status.example.com)` with the required `VESPER_AUTH_MIDDLEWARE`. It covers the UI, static assets, the API and `/healthz`.
+- `vesper-heartbeat`: `POST` to exactly `^/api/heartbeat/<id>/<id>/<id>$`, with priority 1000, without proxy authentication, and with a rate limit and a 1 KiB body limit. Vesper still requires the check's bearer token on this route. Do not apply interactive auth at the whole entrypoint where it would also capture heartbeats.
 
-Merge [`deploy/authelia-access-control.yml`](../deploy/authelia-access-control.yml) into Authelia's rules. It restricts the domain to the admin group. Add no bypass rule for Vesper.
+### Option A: existing authentication middleware
 
-**Record:** `docker network inspect vesper-ingress -f '{{range .Containers}}{{.Name}} {{end}}'`, which must list only Traefik before Vesper starts.
+If you already use an authentication proxy or identity gateway, reuse its Traefik middleware or middleware chain, with a Vesper-specific administrator policy. Set its exact name and provider in `.env`, for example `VESPER_AUTH_MIDDLEWARE=admin-auth@file`. Verify that it denies unauthenticated and unauthorized requests, including API reads and writes, and fails closed if the auth service is unavailable. Vesper requires no provider cookies, identity headers or OIDC registration of its own.
+
+### Option B: HTTPS BasicAuth at Traefik
+
+For a small admin-only installation without a separate identity service, use Traefik's built-in BasicAuth middleware. It offers passwords, not SSO or MFA. Create a bcrypt htpasswd file with `htpasswd -cB /srv/traefik/secrets/vesper.htpasswd YOUR_ADMIN_USERNAME` (the password is prompted, never a command argument; omit `-c` when adding users later). Restrict the file to Traefik's runtime user and mount it read-only **in Traefik**, at `/run/secrets/vesper-users`. Do not put passwords or hashes in Vesper's YAML, Compose labels or `.env`.
+
+With Traefik's file provider enabled, put this in its dynamic configuration directory:
+
+```yaml
+http:
+  middlewares:
+    vesper-auth:
+      basicAuth:
+        usersFile: /run/secrets/vesper-users
+        removeHeader: true
+```
+
+Set `VESPER_AUTH_MIDDLEWARE=vesper-auth@file` in `/srv/vesper/.env`. Use HTTPS only. This middleware applies to the management router, not the heartbeat router: `removeHeader` must not strip heartbeat bearer tokens. Use a unique strong password for each administrator, and see [Traefik's BasicAuth documentation](https://doc.traefik.io/traefik/middlewares/http/basicauth/) for password-file management.
+
+### Option C: Authelia for SSO/MFA (suggested, optional)
+
+For an existing Authelia installation, follow its [Traefik integration guide](https://www.authelia.com/integration/proxies/traefik/) and [session configuration](https://www.authelia.com/configuration/session/introduction/). Configure its HTTPS login portal and session cookie domain to cover `status.example.com`; provision users and MFA in Authelia, not Vesper. This example assumes Traefik can reach `authelia:9091` on a separate private auth network and the standard ForwardAuth endpoint is enabled. It does not provision an Authelia server.
+
+In Traefik's dynamic file configuration:
+
+```yaml
+http:
+  middlewares:
+    authelia:
+      forwardAuth:
+        address: http://authelia:9091/api/authz/forward-auth
+        trustForwardHeader: true
+```
+
+Following Authelia's guide, keep Traefik entrypoint `forwardedHeaders.insecure` and `proxyProtocol.insecure` false; trust upstream headers only from your actual upstream proxy addresses, never arbitrary clients. If the auth hop leaves a private trusted network, use verified TLS to Authelia. Identity response headers are unnecessary for Vesper; it does not turn `Remote-User` into an authenticated audit identity.
+
+Merge the Vesper rule from [`deploy/authelia-access-control.yml`](../deploy/authelia-access-control.yml) into the existing `access_control.rules` before any broader matching rule. Change the domain and admin group; keep the `two_factor` policy. Do not overwrite unrelated rules, and add no `bypass` rule for Vesper or its heartbeat prefix. Set `VESPER_AUTH_MIDDLEWARE=authelia@file` in `/srv/vesper/.env` (or `authelia@docker` if you already define the middleware with Docker labels).
+
+**Record:** the selected middleware, where its administrator policy is configured, and `docker network inspect vesper-ingress -f '{{range .Containers}}{{.Name}} {{end}}'`, which must list only Traefik before Vesper starts. `docker compose --project-directory /srv/vesper config --quiet` must succeed after selecting the middleware; this validates interpolation, not authentication. Phase 10 verifies the protection.
 
 ## 9. Start and verify populated results
 
@@ -351,28 +391,29 @@ Success criteria:
 - Push checks stay `unknown` until their producers run (phase 11).
 - Paused services show `paused`.
 
-Then open the public URL in a browser, log in through Authelia and confirm the dashboard shows the same inventory.
+Then open the public URL in a browser, authenticate through your chosen layer and confirm the dashboard shows the same inventory.
 
 **Record:** the inspect line, the snapshot summary and the full check table, with an explanation for every check that is not `healthy`.
 
 ## 10. Proxy, bypass and exposure checks
 
-Run these from another LAN machine, not the Docker host, without Authelia cookies:
+Run these from another LAN machine, not the Docker host, without authentication cookies, credentials or a client certificate. Protected routes should redirect to your login provider or return 401/403, depending on the auth layer; never Vesper content or a successful API response:
 
 ```sh
 U=https://status.example.com
 code() { curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' "$@"; }
-code "$U/"                                                     # 302 to Authelia (or 401), never 200
-code "$U/api/snapshot"; code "$U/api/config"; code "$U/api/csrf"; code "$U/healthz"   # all Authelia
-code -X POST "$U/api/snapshot"                                 # Authelia
+code "$U/"                                                     # auth redirect or 401/403, never 200
+code "$U/api/snapshot"; code "$U/api/config"; code "$U/api/csrf"; code "$U/healthz"   # protected
+code -X POST "$U/api/snapshot"                                 # protected
 code -X POST -H 'Content-Type: application/json' -d '{"healthy":true}' \
   "$U/api/heartbeat/docker1/host/containers"                   # 401 from Vesper (no token): bypass reaches Vesper
 curl -sS -X POST -d '{"healthy":true}' "$U/api/heartbeat/docker1/host/containers"   # body: {"error": ...}
-code "$U/api/heartbeat/docker1/host/containers"                # GET: Authelia
-code -X POST "$U/api/heartbeat/docker1/host"                   # wrong depth: Authelia
-code -X POST "$U/api/heartbeat/docker1/host/containers/extra"  # Authelia
-code -X POST "$U/api/heartbeatx/docker1/host/containers"       # Authelia
-code -X POST "$U/api/heartbeat/a%2Fb/c/d"                      # Authelia
+code "$U/api/heartbeat/docker1/host/containers"                # GET: protected
+code -X POST "$U/api/heartbeat/docker1/host"                   # wrong depth: protected
+code -X POST "$U/api/heartbeat/docker1/host/containers/extra"  # protected
+code -X POST "$U/api/heartbeatx/docker1/host/containers"       # protected
+code -X POST "$U/api/heartbeat/a%2Fb/c/d"                      # protected
+code "$U/api/snapshot" -H 'Remote-User: admin' -H 'X-Forwarded-For: 127.0.0.1'  # still protected
 curl -sS --max-time 5 "http://<docker-host-LAN-IP>:8080/healthz" || echo "not reachable (expected)"
 ```
 
@@ -388,9 +429,11 @@ vesper_api POST /api/config/reload -o /dev/null -w '%{http_code}\n' -H "Origin: 
 vesper_api POST /api/config/reload -w '\n%{http_code}\n' -H "X-Vesper-CSRF: $csrf" -H "Origin: https://status.example.com"      # 2xx
 ```
 
-The CSRF token is random per process and is not tied to a cookie. Fetch a fresh one after every restart. `/healthz` answers any direct peer with liveness only. Through Traefik it stays behind Authelia.
+The CSRF token is random per process and is not tied to a cookie. Fetch a fresh one after every restart. `/healthz` answers any direct peer with liveness only. Through the external proxy it stays authenticated.
 
-**Record:** every status code. Any 200 on a protected path, or anything other than Vesper's 401 on the token-less heartbeat, is a blocker. Stop and fix the routing before going further.
+Also test a permitted administrator and, for group-based auth, a signed-in user outside the admin group. Only the administrator should reach the dashboard and APIs. In an isolated test route or an approved maintenance window, make the authentication service unreachable and confirm access is denied, never forwarded unprotected; for BasicAuth, test a wrong password instead. Do not disrupt a shared login service just to run this check.
+
+**Record:** every status code and the admitted/denied-user and auth-failure results. Any successful unauthenticated response on a protected path, or anything other than Vesper's 401 on the token-less heartbeat, is a blocker. An authenticated valid heartbeat must also succeed (phase 11), so a 401 from the proxy's BasicAuth layer is not sufficient evidence. Stop and fix routing before going further.
 
 ## 11. Push producers (Docker, Proxmox, jobs)
 
@@ -450,7 +493,7 @@ Then install `proxmox-health.env` and the unit and timer as for Docker. If `http
 3. Put `VESPER_TELEGRAM_CHAT_ID=<id>` in `/srv/vesper/vesper.env`, make sure `telegram.dashboard_url` equals the public origin, then run `docker compose up -d`, which recreates the container to pick up the new environment.
 4. Send the explicit test from Settings → Telegram, or with:
    `csrf=$(vesper_api GET /api/csrf | jq -r .token); vesper_api POST /api/telegram/test -H "X-Vesper-CSRF: $csrf" -H 'Origin: https://status.example.com'`
-5. **Ask the user** whether the message arrived in the intended chat and whether its dashboard link opens (through Authelia). A 2xx response only means the Bot API accepted the message.
+5. **Ask the user** whether the message arrived in the intended chat and whether its dashboard link opens through the chosen authentication layer. A 2xx response only means the Bot API accepted the message.
 
 Typical failures: `401 Unauthorized` means a wrong token. `400 chat not found` means a wrong ID, or the bot was never messaged. `403` means the bot was blocked or removed from the group. `429` means rate limiting; Vesper honours `retry_after`. After a 400, 401, 403 or 404 rejection, Vesper stops delivering until the configuration revision changes or a test succeeds. Fix the cause, then run the test again. The snapshot's `telegram` field shows the current delivery state.
 
@@ -533,7 +576,7 @@ Stop if pull, inspect or validation fails. Fetch installation assets at the new 
 | Config | Git, or `tar -C /srv/vesper -czf config-$(date -u +%F).tgz config` | Also keep `vesper_cli export > vesper-export-$(date -u +%F).yaml`. It is a single-file YAML copy with secret references only, and it does not keep the split layout or comments. |
 | Data (`vesper.db`) | Stop, copy, start; or an online `sqlite3 .backup` | History, incidents, acknowledgements, silences, audit and delivery state |
 | Secrets | A separate encrypted backup, kept apart from the others | Never store secrets with the config backup |
-| Deployment | `compose.yaml`, `.env`, `vesper.env` (encrypted), Traefik and Authelia snippets | |
+| Deployment | `compose.yaml`, `.env`, `vesper.env` (encrypted), reverse-proxy and authentication configuration | |
 
 Consistent data backup, choose one:
 
@@ -575,7 +618,7 @@ Then confirm that the incident history and recent samples from before the backup
 | Check says destination not allowed | The resolved address is outside `allowed_cidrs`, or it is loopback or link-local |
 | TLS errors for internal services | `private_ca_file` missing, or the certificate does not cover the URL's host |
 | Heartbeat 401 | Wrong token or check ID, or the token file has extra content. Vesper deliberately does not say which |
-| Heartbeat goes to the Authelia login | The heartbeat router is missing or shadowed, or the request is not POST to exactly three IDs |
+| Heartbeat goes to a login page or gets a proxy auth challenge | The heartbeat router is missing or shadowed, auth is applied to the entire entrypoint, or the request is not POST to exactly three IDs |
 
 ## 19. Final report
 

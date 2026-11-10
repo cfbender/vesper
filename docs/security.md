@@ -4,25 +4,26 @@ Vesper is a single-tenant homelab monitor. It has no accounts of its own. Its sa
 
 ## Trust boundaries
 
-```text
- browser ──HTTPS──▶ Traefik ──forward-auth──▶ Authelia
-                      │  (admitted users only, every route except one)
-                      │
- push producer ─HTTPS─┤  POST /api/heartbeat/<m>/<s>/<c>  (no Authelia; bearer token)
-                      ▼
-            vesper-ingress (internal, Traefik + Vesper only)
-                      ▼
-                 Vesper :8080 ──egress bridge──▶ LAN targets in allowed_cidrs, api.telegram.org
-```
+Browsers connect over HTTPS to a reverse proxy that authenticates and authorizes administrators, either itself or through an external authentication service. Only the proxy can reach Vesper's management interface over a private connection. Push producers use one narrowly scoped bearer-token route. Vesper connects outbound to allowed LAN destinations and Telegram.
 
-- **The authentication proxy is the only access control.** Vesper has no users, passwords, OIDC or sessions. Every request that Traefik forwards from an admitted user is an administrator request: it can edit monitoring YAML (when writable), silence, acknowledge, upload icons and send Telegram tests. Restrict the Authelia rule to the people who should have that power ([deploy/authelia-access-control.yml](../deploy/authelia-access-control.yml)).
+- **External authentication is required; Authelia is not.** Vesper has no users, passwords, OIDC or sessions. Every request admitted to its management interface is an administrator request: it can edit monitoring YAML (when writable), silence, acknowledge, upload icons and send Telegram tests. Restrict your proxy's authorization policy to people who should have that power. Authelia is a suggested SSO/MFA option, with an [optional access-control example](../deploy/authelia-access-control.yml); proxy-native HTTPS BasicAuth is another option for a small admin-only deployment.
 - **Trusted peers.** Vesper serves the dashboard and API only to TCP peers inside `VESPER_TRUSTED_PROXIES`. Peers anywhere else get 403. The reference deployment trusts only the internal `vesper-ingress` network, which Traefik alone joins. Anyone who can attach a container to that network can act as an administrator. That is already a Docker administrator, who is root-equivalent on the host. `VESPER_DEV_MODE=true` relaxes this check for local development only. Never set it in a deployment.
-- **No published port.** The container publishes nothing on the host. The only way in is through Traefik.
-- **`/healthz`** answers any direct peer with liveness only: no inventory, no versions, no credentials. Through Traefik it stays behind Authelia.
+- **No published port.** The reference container publishes nothing on the host. Keep the backend reachable only by the authenticating proxy, never directly by clients or the internet.
+- **`/healthz`** answers any direct peer with liveness only: no inventory, no versions, no credentials. Keep it protected at the external proxy like the other non-heartbeat routes.
+
+## Reverse-proxy and authentication contract
+
+Traefik is the reference deployment, not a runtime dependency. Another reverse proxy (for example Nginx or Caddy) can meet the same contract; Vesper has no provider-specific authentication integration.
+
+1. Terminate HTTPS at the proxy and protect **every dashboard, static asset and management API route**, including read-only endpoints and `/api/csrf`. Admit only Vesper administrators; authenticating everyone in an organization is not sufficient authorization. Deny access when the authentication service fails. A private LAN or a proxy with no authentication is not a substitute.
+2. Route allowed requests to Vesper over a private network. Set `VESPER_TRUSTED_PROXIES` to the **immediate TCP peer addresses** of the proxy, preferably exact `/32` or `/128` addresses, or an isolated subnet containing only trusted proxies and Vesper. Never list all LAN clients or `0.0.0.0/0`. Vesper does not use `Forwarded`, `X-Forwarded-For`, identity headers, provider cookies, or a proxy-supplied username to decide who is an administrator. Requests from a trusted peer are already admin-equivalent; the peer check cannot verify that your proxy actually authenticated them.
+3. Set `VESPER_PUBLIC_URL` to the externally visible HTTPS origin without a path. Preserve browser `Origin`, `Sec-Fetch-Site` and `X-Vesper-CSRF`; do not replace an untrusted Origin with the configured one. Preserve the public host/scheme through your auth layer for its redirects. Sanitize client-supplied forwarding and identity headers at your proxy's trust boundary according to its documentation. Vesper does not need identity response headers and does not attribute audit entries to an asserted user.
+4. If push producers bypass interactive authentication, exempt only the exact POST heartbeat route below. Preserve its `Authorization: Bearer` header unchanged. Do not exempt the `/api` prefix, all heartbeat methods, or an entire domain. Apply the body and rate limits at the proxy; producers must never receive an HTML login page for a valid heartbeat.
+5. Verify both denied and admitted users, authentication-service failure, direct-backend rejection, spoofed headers, CSRF enforcement and heartbeat isolation using installation phase 10. A login screen alone does not prove the API is protected.
 
 ## The heartbeat exception
 
-Exactly one route skips Authelia: `POST` to `/api/heartbeat/<machine>/<service>/<check>`, with three ID segments of `A-Z a-z 0-9 _ -`. The Traefik rule uses an anchored `PathRegexp` and `Method(POST)`, at a higher priority than the main router. It adds a per-source rate limit and a 1 KiB body limit. Other methods, depths, prefixes and encoded variants fall through to the authenticated router. [installation.md](installation.md) phase 10 lists the checks that prove this.
+Exactly one route skips proxy authentication: `POST` to `/api/heartbeat/<machine>/<service>/<check>`, with three ID segments of `A-Z a-z 0-9 _ -` (1–80 characters each). The Traefik rule uses an anchored `PathRegexp` and `Method(POST)`, at a higher priority than the main router. It adds a per-source rate limit and a 1 KiB body limit. Other methods, depths, prefixes and encoded variants fall through to the authenticated router. [installation.md](installation.md) phase 10 lists the checks that prove this.
 
 On that route, Vesper:
 
@@ -34,7 +35,7 @@ Push producers ([examples/producers](../examples/producers)) send the token only
 
 ## Browser protections
 
-- Every management mutation requires the `X-Vesper-CSRF` token from `GET /api/csrf`, and an `Origin` header exactly equal to `VESPER_PUBLIC_URL`. That URL must be an `https` origin without a path. The token is random per process and is not a cookie or a session. CSRF protection is not authentication: Authelia still guards these endpoints.
+- Every management mutation requires the `X-Vesper-CSRF` token from `GET /api/csrf`, and an `Origin` header exactly equal to `VESPER_PUBLIC_URL`. That URL must be an `https` origin without a path. The token is random per process and is not a cookie or a session. CSRF protection is not authentication: the external auth layer still guards these endpoints.
 - No permissive CORS. Monitored response bodies are never rendered as HTML, and probe evidence is sanitized and bounded.
 - Icon uploads accept PNG, JPEG or WebP only, up to 2 MiB and 2048×2048 pixels. They are re-encoded to PNG of at most 256 px. User SVG is rejected; only bundled, trusted SVG is served.
 
@@ -78,7 +79,7 @@ Active checks are a server-side request feature, so they are constrained:
 
 ## Known limits
 
-- Anyone admitted by Authelia is a full administrator. Vesper has no user identity of its own, so use Authelia's and Traefik's logs to attribute the actions in Vesper's audit log.
+- Anyone admitted by the authentication proxy is a full administrator. Vesper has no user identity of its own. Its audit log records actions without an authenticated username; use your proxy/authentication logs for investigation rather than treating identity headers as Vesper-verified attribution.
 - An attacker who holds a check's push token can mark that one check healthy or unhealthy. Rotate the token if it is exposed.
 - Monitoring from one vantage point cannot tell a target outage from a path outage. Telegram API acceptance is not delivery proof.
 - Vesper cannot detect its own outage. Run the independent watchdog.

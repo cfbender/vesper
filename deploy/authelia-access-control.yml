@@ -1,4 +1,7 @@
-# Merge into Authelia's configuration.yml under `access_control.rules`.
+# Optional Authelia example; Vesper does not require Authelia.
+# Merge the rule below into the existing `access_control.rules`, before broader
+# matching rules. Preserve unrelated rules and settings. See installation.md
+# phase 8 for the Traefik middleware and session setup.
 # Every user Authelia admits to Vesper is a Vesper administrator: Vesper has
 # no accounts, roles or sessions of its own. Restrict the domain to the
 # people who should be able to edit monitoring, acknowledge and silence.
