@@ -119,6 +119,8 @@ describe("overview", () => {
   });
 
   it("shows every machine and service without overview headings, incident rows or a site filter", async () => {
+    const machine = snapshot.machines[0];
+    machine.description = "Detailed host information belongs in the machine view.";
     renderAt("/");
     expect(await screen.findAllByRole("heading", { level: 3 })).toHaveLength(3);
     const main = within(screen.getByRole("main"));
@@ -135,6 +137,13 @@ describe("overview", () => {
       }
     }
     expect(screen.getByRole("link", { name: /^Incidents/ })).toHaveAttribute("href", "/incidents");
+    expect(main.queryByText(machine.description)).not.toBeInTheDocument();
+    const heading = main.getByRole("heading", { level: 3, name: machine.name });
+    const host = within(heading.closest("section")!);
+    expect(host.getByText(new RegExp(`${machine.services.length} services ·`))).toBeInTheDocument();
+    await userEvent.setup().click(heading.closest("a")!);
+    expect(await screen.findByRole("heading", { level: 1, name: machine.name })).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(machine.description))).toBeInTheDocument();
   });
 
   it("turns a lost snapshot connection into stale last-known state, never Down", async () => {

@@ -40,8 +40,10 @@ function ServiceTile({ service, machine }: { service: ServiceView; machine: Mach
       aria-label={`${service.name}, ${d.label}${flags.length ? `, ${flags.join(", ")}` : ""}, on ${machine.name}`}
     >
       <ServiceIcon icon={service.icon} size={28} />
-      <span className="service-name">{service.name}</span>
-      {flags.length > 0 && <span className="tile-flag">{flags.join(" · ")}</span>}
+      <span className="service-label">
+        <span className="service-name">{service.name}</span>
+        {flags.length > 0 && <span className="tile-flag">{flags.join(" · ")}</span>}
+      </span>
       <span className="tile-dot">
         <StatusDot tone={d.tone} size={12} />
       </span>
@@ -56,15 +58,20 @@ function MachineCard({ machine }: { machine: MachineView }) {
   const last = lastChecked(machine.services);
   return (
     <section className="host card" aria-labelledby={`machine-${machine.id}`}>
-      <Link to={paths.machine(machine.id)} className="host-link">
-        <span className="host-head">
-          <h3 id={`machine-${machine.id}`}>{machine.name || machine.id}</h3>
-          <HealthBadge health={machine.health} />
-        </span>
-        <span className="host-sub">
-          {[machine.site, machine.description].filter(Boolean).join(" · ") || machine.id}
-        </span>
-      </Link>
+      <div className="host-summary">
+        <Link to={paths.machine(machine.id)} className="host-link">
+          <span className="host-head">
+            <h3 id={`machine-${machine.id}`}>{machine.name || machine.id}</h3>
+            <HealthBadge health={machine.health} />
+          </span>
+        </Link>
+        <p className="foot">
+          {machine.services.length} service{machine.services.length === 1 ? "" : "s"} · {checks.length} check
+          {checks.length === 1 ? "" : "s"}
+          {live && failing > 0 ? ` · ${failing} failing` : ""} ·{" "}
+          {live ? `checked ${ago(last, now)}` : `last seen ${localTime(last)}`}
+        </p>
+      </div>
       {machine.services.length > 0 ? (
         <div className="service-grid">
           {machine.services.map((s) => (
@@ -74,12 +81,6 @@ function MachineCard({ machine }: { machine: MachineView }) {
       ) : (
         <p className="note">No services yet.</p>
       )}
-      <p className="foot">
-        {machine.services.length} service{machine.services.length === 1 ? "" : "s"} · {checks.length} check
-        {checks.length === 1 ? "" : "s"}
-        {live && failing > 0 ? ` · ${failing} failing` : ""} ·{" "}
-        {live ? `checked ${ago(last, now)}` : `last seen ${localTime(last)}`}
-      </p>
     </section>
   );
 }

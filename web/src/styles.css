@@ -437,16 +437,23 @@ pre.evidence.block {
 }
 .hosts {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   align-items: start;
 }
 .host {
-  padding: 14px;
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+  padding: 18px;
+}
+.host-summary {
+  min-width: 0;
 }
 .host-link {
   display: block;
-  margin: -6px -6px 10px;
+  margin: -6px;
   padding: 6px;
   border-radius: 8px;
   min-height: 44px;
@@ -458,39 +465,32 @@ pre.evidence.block {
 }
 .host-head {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
 }
 .host-head h3 {
   font-size: 20px;
   overflow-wrap: anywhere;
 }
-.host-sub {
-  display: block;
-  font-size: 13px;
-  color: var(--muted);
-  margin-top: 2px;
-}
 .service-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 6px;
 }
 .service-tile {
-  position: relative;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 12px;
   align-items: center;
-  gap: 6px;
-  min-height: 80px;
+  gap: 8px;
+  min-height: 56px;
   min-width: 0;
-  padding: 12px 8px 8px;
+  padding: 8px 7px 8px 10px;
   border: 1px solid oklch(45% 0.025 5 / 0.35);
   border-radius: 9px;
   background: oklch(18% 0.025 5 / 0.6);
   color: var(--ink);
-  text-align: center;
+  text-align: left;
   text-decoration: none;
   transition: background 0.15s, border-color 0.15s;
 }
@@ -512,25 +512,30 @@ pre.evidence.block {
 .service-icon.generic {
   color: oklch(80% 0.04 350);
 }
+.service-tile .service-icon {
+  width: 24px;
+  height: 24px;
+}
+.service-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .service-name {
+  display: block;
   font-size: 13px;
   line-height: 1.3;
   overflow-wrap: anywhere;
 }
 .tile-flag {
+  display: block;
   font-size: 11px;
   color: var(--muted);
 }
 .tile-dot {
-  position: absolute;
-  top: 6px;
-  right: 6px;
   display: flex;
 }
-.foot {
+.host .foot {
   margin-top: 12px;
-  padding-top: 9px;
-  border-top: 1px solid var(--line);
   font-size: 12px;
   color: var(--muted);
 }
@@ -956,6 +961,23 @@ td:first-child {
   color: var(--muted);
 }
 
+/* Tablets: move the summary above the grid rather than squeezing tiles. */
+@media (max-width: 900px) {
+  .host {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+  .host-head {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .host .foot {
+    margin-top: 6px;
+  }
+}
+
 /* Phones: machines stack; services stay in two columns. */
 @media (max-width: 560px) {
   :root {
@@ -994,24 +1016,16 @@ td:first-child {
   .host {
     padding: 11px;
   }
+  .service-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .service-tile {
-    flex-direction: row;
-    justify-content: flex-start;
-    gap: 8px;
-    min-height: 56px;
-    padding: 8px 22px 8px 8px;
-    text-align: left;
+    gap: 6px;
+    padding-left: 8px;
   }
   .service-icon {
     width: 24px;
     height: 24px;
-  }
-  .tile-flag {
-    display: none;
-  }
-  .tile-dot {
-    top: calc(50% - 6px);
-    right: 7px;
   }
   .grid2,
   .header-row,
@@ -1064,8 +1078,8 @@ td:first-child {
 
 @media (max-width: 340px) {
   .service-tile {
-    gap: 6px;
-    padding-left: 6px;
+    gap: 4px;
+    padding-inline: 6px;
   }
   .service-name {
     font-size: 12px;
