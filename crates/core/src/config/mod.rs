@@ -1,5 +1,6 @@
 //! Directory-backed YAML configuration: loading, validation, provenance and
-//! safe, source-aware saving. See `docs/configuration.md` for the layout.
+//! safe, source-aware saving. See `crates/core/CONFIGURATION.md` for the layout,
+//! rules and limitations.
 
 mod assemble;
 mod fs;
@@ -80,16 +81,22 @@ impl std::error::Error for SaveError {}
 /// layout is ambiguous, or validation fails; callers keep their last valid
 /// [`LoadedConfig`] in that case.
 pub fn load(root: &Path) -> Result<LoadedConfig> {
-    let root = fs::root_dir(root)?;
-    let _lock = fs::RootLock::acquire(&root, false)?;
-    let tree = fs::scan(&root)?;
-    let (assembled, config) = assemble::assemble(&tree)?;
+    let root = fs::Root::open(root)?;
+    let tree = {
+        let _lock = root.lock(false)?;
+        root.scan()?
+    };
+    loaded(&tree)
+}
+
+fn loaded(tree: &fs::Tree) -> Result<LoadedConfig> {
+    let (assembled, config) = assemble::assemble(tree)?;
     validate(&config)?;
     Ok(LoadedConfig {
         config,
         revision: tree.revision(),
         sources: assembled.sources(),
-        writable: fs::writable(&root, &tree),
+        writable: tree.writable,
     })
 }
 
@@ -156,11 +163,11 @@ fn save_with(
     expected_revision: &str,
     change: impl FnOnce(&mut Config) -> Result<()>,
 ) -> Result<LoadedConfig> {
-    let root = fs::root_dir(root)?;
+    let root = fs::Root::open(root)?;
+    let _lock = root.lock(true)?;
+    let tree = root.scan()?;
     {
-        let _lock = fs::RootLock::acquire(&root, true)?;
-        let tree = fs::scan(&root)?;
-        if !fs::writable(&root, &tree) {
+        if !tree.writable {
             return Err(SaveError::ReadOnly.into());
         }
         let revision = tree.revision();
@@ -192,9 +199,9 @@ fn save_with(
                 .into())
             }
         }
-        fs::commit(&root, &ops)?;
+        root.commit(&tree, &ops)?;
     }
-    load(&root)
+    loaded(&root.scan()?)
 }
 
 /// Renders a service as standalone YAML: the content of a
