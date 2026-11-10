@@ -752,6 +752,9 @@ td:first-child {
 .editor form {
   display: grid;
 }
+.editor form > * {
+  min-width: 0;
+}
 .editor form > :first-child {
   margin-top: 0;
 }
@@ -1024,11 +1027,31 @@ td:first-child {
     border-radius: 0;
     border-inline: 0;
   }
+  .savebar {
+    padding: 6px 10px 8px;
+    gap: 4px;
+  }
+  .savebar-status {
+    font-size: 12px;
+  }
   .savebar .actions {
     width: 100%;
+    gap: 6px;
   }
   .savebar .btn {
     flex: 1 1 auto;
+    padding: 6px 8px;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+  .segmented {
+    display: flex;
+  }
+  .segmented .radio,
+  .segmented button {
+    flex: 1;
+    justify-content: center;
+    padding: 6px 8px;
   }
   .timeline li {
     grid-template-columns: 5.5em 1fr;
