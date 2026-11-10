@@ -1,0 +1,639 @@
+{
+  "icons": [
+    {
+      "id": "actual-budget",
+      "name": "Actual Budget",
+      "url": "/icons/dashboard/actual-budget.png"
+    },
+    {
+      "id": "adguard-home",
+      "name": "AdGuard Home",
+      "url": "/icons/dashboard/adguard-home.png"
+    },
+    {
+      "id": "audiobookshelf",
+      "name": "Audiobookshelf",
+      "url": "/icons/dashboard/audiobookshelf.png"
+    },
+    {
+      "id": "authelia",
+      "name": "Authelia",
+      "url": "/icons/dashboard/authelia.png"
+    },
+    {
+      "id": "authentik",
+      "name": "Authentik",
+      "url": "/icons/dashboard/authentik.png"
+    },
+    {
+      "id": "backrest",
+      "name": "Backrest",
+      "url": "/icons/dashboard/backrest.png"
+    },
+    {
+      "id": "bazarr",
+      "name": "Bazarr",
+      "url": "/icons/dashboard/bazarr.png"
+    },
+    {
+      "id": "bitwarden",
+      "name": "Bitwarden",
+      "url": "/icons/dashboard/bitwarden.png"
+    },
+    {
+      "id": "bookstack",
+      "name": "BookStack",
+      "url": "/icons/dashboard/bookstack.png"
+    },
+    {
+      "id": "caddy",
+      "name": "Caddy",
+      "url": "/icons/dashboard/caddy.png"
+    },
+    {
+      "id": "calibre-web",
+      "name": "Calibre-Web",
+      "url": "/icons/dashboard/calibre-web.png"
+    },
+    {
+      "id": "changedetection",
+      "name": "changedetection.io",
+      "url": "/icons/dashboard/changedetection.png"
+    },
+    {
+      "id": "cloudflare",
+      "name": "Cloudflare",
+      "url": "/icons/dashboard/cloudflare.png"
+    },
+    {
+      "id": "cloudflare-zero-trust",
+      "name": "Cloudflare Zero Trust",
+      "url": "/icons/dashboard/cloudflare-zero-trust.png"
+    },
+    {
+      "id": "code-server",
+      "name": "code-server",
+      "url": "/icons/dashboard/code-server.png"
+    },
+    {
+      "id": "dashy",
+      "name": "Dashy",
+      "url": "/icons/dashboard/dashy.png"
+    },
+    {
+      "id": "deluge",
+      "name": "Deluge",
+      "url": "/icons/dashboard/deluge.png"
+    },
+    {
+      "id": "docker",
+      "name": "Docker",
+      "url": "/icons/dashboard/docker.png"
+    },
+    {
+      "id": "dozzle",
+      "name": "Dozzle",
+      "url": "/icons/dashboard/dozzle.png"
+    },
+    {
+      "id": "duplicati",
+      "name": "Duplicati",
+      "url": "/icons/dashboard/duplicati.png"
+    },
+    {
+      "id": "element",
+      "name": "Element",
+      "url": "/icons/dashboard/element.png"
+    },
+    {
+      "id": "emby",
+      "name": "Emby",
+      "url": "/icons/dashboard/emby.png"
+    },
+    {
+      "id": "esphome",
+      "name": "ESPHome",
+      "url": "/icons/dashboard/esphome.png"
+    },
+    {
+      "id": "excalidraw",
+      "name": "Excalidraw",
+      "url": "/icons/dashboard/excalidraw.png"
+    },
+    {
+      "id": "filebrowser",
+      "name": "Filebrowser",
+      "url": "/icons/dashboard/filebrowser.png"
+    },
+    {
+      "id": "firefly-iii",
+      "name": "Firefly III",
+      "url": "/icons/dashboard/firefly-iii.png"
+    },
+    {
+      "id": "forgejo",
+      "name": "Forgejo",
+      "url": "/icons/dashboard/forgejo.png"
+    },
+    {
+      "id": "freshrss",
+      "name": "FreshRSS",
+      "url": "/icons/dashboard/freshrss.png"
+    },
+    {
+      "id": "frigate",
+      "name": "Frigate",
+      "url": "/icons/dashboard/frigate.png"
+    },
+    {
+      "id": "gitea",
+      "name": "Gitea",
+      "url": "/icons/dashboard/gitea.png"
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "url": "/icons/dashboard/github.png"
+    },
+    {
+      "id": "gitlab",
+      "name": "GitLab",
+      "url": "/icons/dashboard/gitlab.png"
+    },
+    {
+      "id": "glances",
+      "name": "Glances",
+      "url": "/icons/dashboard/glances.png"
+    },
+    {
+      "id": "gotify",
+      "name": "Gotify",
+      "url": "/icons/dashboard/gotify.png"
+    },
+    {
+      "id": "grafana",
+      "name": "Grafana",
+      "url": "/icons/dashboard/grafana.png"
+    },
+    {
+      "id": "guacamole",
+      "name": "Guacamole",
+      "url": "/icons/dashboard/guacamole.png"
+    },
+    {
+      "id": "headscale",
+      "name": "Headscale",
+      "url": "/icons/dashboard/headscale.png"
+    },
+    {
+      "id": "heimdall",
+      "name": "Heimdall",
+      "url": "/icons/dashboard/heimdall.png"
+    },
+    {
+      "id": "homarr",
+      "name": "Homarr",
+      "url": "/icons/dashboard/homarr.png"
+    },
+    {
+      "id": "home-assistant",
+      "name": "Home Assistant",
+      "url": "/icons/dashboard/home-assistant.png"
+    },
+    {
+      "id": "homebridge",
+      "name": "Homebridge",
+      "url": "/icons/dashboard/homebridge.png"
+    },
+    {
+      "id": "homepage",
+      "name": "Homepage",
+      "url": "/icons/dashboard/homepage.png"
+    },
+    {
+      "id": "immich",
+      "name": "Immich",
+      "url": "/icons/dashboard/immich.png"
+    },
+    {
+      "id": "influxdb",
+      "name": "InfluxDB",
+      "url": "/icons/dashboard/influxdb.png"
+    },
+    {
+      "id": "it-tools",
+      "name": "IT Tools",
+      "url": "/icons/dashboard/it-tools.png"
+    },
+    {
+      "id": "jellyfin",
+      "name": "Jellyfin",
+      "url": "/icons/dashboard/jellyfin.png"
+    },
+    {
+      "id": "jellyseerr",
+      "name": "Jellyseerr",
+      "url": "/icons/dashboard/jellyseerr.png"
+    },
+    {
+      "id": "jellystat",
+      "name": "Jellystat",
+      "url": "/icons/dashboard/jellystat.png"
+    },
+    {
+      "id": "jenkins",
+      "name": "Jenkins",
+      "url": "/icons/dashboard/jenkins.png"
+    },
+    {
+      "id": "jupyter",
+      "name": "Jupyter",
+      "url": "/icons/dashboard/jupyter.png"
+    },
+    {
+      "id": "kavita",
+      "name": "Kavita",
+      "url": "/icons/dashboard/kavita.png"
+    },
+    {
+      "id": "keycloak",
+      "name": "Keycloak",
+      "url": "/icons/dashboard/keycloak.png"
+    },
+    {
+      "id": "komga",
+      "name": "Komga",
+      "url": "/icons/dashboard/komga.png"
+    },
+    {
+      "id": "kopia",
+      "name": "Kopia",
+      "url": "/icons/dashboard/kopia.png"
+    },
+    {
+      "id": "lidarr",
+      "name": "Lidarr",
+      "url": "/icons/dashboard/lidarr.png"
+    },
+    {
+      "id": "linkding",
+      "name": "linkding",
+      "url": "/icons/dashboard/linkding.png"
+    },
+    {
+      "id": "linux",
+      "name": "Linux",
+      "url": "/icons/dashboard/linux.png"
+    },
+    {
+      "id": "loki",
+      "name": "Loki",
+      "url": "/icons/dashboard/loki.png"
+    },
+    {
+      "id": "mariadb",
+      "name": "MariaDB",
+      "url": "/icons/dashboard/mariadb.png"
+    },
+    {
+      "id": "matrix",
+      "name": "Matrix",
+      "url": "/icons/dashboard/matrix.png"
+    },
+    {
+      "id": "mealie",
+      "name": "Mealie",
+      "url": "/icons/dashboard/mealie.png"
+    },
+    {
+      "id": "mikrotik",
+      "name": "MikroTik",
+      "url": "/icons/dashboard/mikrotik.png"
+    },
+    {
+      "id": "minecraft",
+      "name": "Minecraft",
+      "url": "/icons/dashboard/minecraft.png"
+    },
+    {
+      "id": "miniflux",
+      "name": "Miniflux",
+      "url": "/icons/dashboard/miniflux.png"
+    },
+    {
+      "id": "minio",
+      "name": "MinIO",
+      "url": "/icons/dashboard/minio.png"
+    },
+    {
+      "id": "mongodb",
+      "name": "MongoDB",
+      "url": "/icons/dashboard/mongodb.png"
+    },
+    {
+      "id": "mosquitto",
+      "name": "Mosquitto",
+      "url": "/icons/dashboard/mosquitto.png"
+    },
+    {
+      "id": "mysql",
+      "name": "MySQL",
+      "url": "/icons/dashboard/mysql.png"
+    },
+    {
+      "id": "n8n",
+      "name": "n8n",
+      "url": "/icons/dashboard/n8n.png"
+    },
+    {
+      "id": "navidrome",
+      "name": "Navidrome",
+      "url": "/icons/dashboard/navidrome.png"
+    },
+    {
+      "id": "netdata",
+      "name": "Netdata",
+      "url": "/icons/dashboard/netdata.png"
+    },
+    {
+      "id": "nextcloud",
+      "name": "Nextcloud",
+      "url": "/icons/dashboard/nextcloud.png"
+    },
+    {
+      "id": "nginx",
+      "name": "Nginx",
+      "url": "/icons/dashboard/nginx.png"
+    },
+    {
+      "id": "nginx-proxy-manager",
+      "name": "Nginx Proxy Manager",
+      "url": "/icons/dashboard/nginx-proxy-manager.png"
+    },
+    {
+      "id": "node-red",
+      "name": "Node-RED",
+      "url": "/icons/dashboard/node-red.png"
+    },
+    {
+      "id": "ntfy",
+      "name": "ntfy",
+      "url": "/icons/dashboard/ntfy.png"
+    },
+    {
+      "id": "nzbget",
+      "name": "NZBGet",
+      "url": "/icons/dashboard/nzbget.png"
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "url": "/icons/dashboard/ollama.png"
+    },
+    {
+      "id": "open-webui",
+      "name": "Open WebUI",
+      "url": "/icons/dashboard/open-webui.png"
+    },
+    {
+      "id": "openmediavault",
+      "name": "openmediavault",
+      "url": "/icons/dashboard/openmediavault.png"
+    },
+    {
+      "id": "opnsense",
+      "name": "OPNsense",
+      "url": "/icons/dashboard/opnsense.png"
+    },
+    {
+      "id": "outline",
+      "name": "Outline",
+      "url": "/icons/dashboard/outline.png"
+    },
+    {
+      "id": "overseerr",
+      "name": "Overseerr",
+      "url": "/icons/dashboard/overseerr.png"
+    },
+    {
+      "id": "paperless-ngx",
+      "name": "Paperless-ngx",
+      "url": "/icons/dashboard/paperless-ngx.png"
+    },
+    {
+      "id": "pfsense",
+      "name": "pfSense",
+      "url": "/icons/dashboard/pfsense.png"
+    },
+    {
+      "id": "photoprism",
+      "name": "PhotoPrism",
+      "url": "/icons/dashboard/photoprism.png"
+    },
+    {
+      "id": "pi-hole",
+      "name": "Pi-hole",
+      "url": "/icons/dashboard/pi-hole.png"
+    },
+    {
+      "id": "plex",
+      "name": "Plex",
+      "url": "/icons/dashboard/plex.png"
+    },
+    {
+      "id": "portainer",
+      "name": "Portainer",
+      "url": "/icons/dashboard/portainer.png"
+    },
+    {
+      "id": "postgresql",
+      "name": "PostgreSQL",
+      "url": "/icons/dashboard/postgresql.png"
+    },
+    {
+      "id": "prometheus",
+      "name": "Prometheus",
+      "url": "/icons/dashboard/prometheus.png"
+    },
+    {
+      "id": "prowlarr",
+      "name": "Prowlarr",
+      "url": "/icons/dashboard/prowlarr.png"
+    },
+    {
+      "id": "proxmox",
+      "name": "Proxmox",
+      "url": "/icons/dashboard/proxmox.png"
+    },
+    {
+      "id": "qbittorrent",
+      "name": "qBittorrent",
+      "url": "/icons/dashboard/qbittorrent.png"
+    },
+    {
+      "id": "qnap",
+      "name": "QNAP",
+      "url": "/icons/dashboard/qnap.png"
+    },
+    {
+      "id": "radarr",
+      "name": "Radarr",
+      "url": "/icons/dashboard/radarr.png"
+    },
+    {
+      "id": "raspberry-pi",
+      "name": "Raspberry Pi",
+      "url": "/icons/dashboard/raspberry-pi.png"
+    },
+    {
+      "id": "readarr",
+      "name": "Readarr",
+      "url": "/icons/dashboard/readarr.png"
+    },
+    {
+      "id": "redis",
+      "name": "Redis",
+      "url": "/icons/dashboard/redis.png"
+    },
+    {
+      "id": "restic",
+      "name": "Restic",
+      "url": "/icons/dashboard/restic.png"
+    },
+    {
+      "id": "rustdesk",
+      "name": "RustDesk",
+      "url": "/icons/dashboard/rustdesk.png"
+    },
+    {
+      "id": "sabnzbd",
+      "name": "SABnzbd",
+      "url": "/icons/dashboard/sabnzbd.png"
+    },
+    {
+      "id": "scrutiny",
+      "name": "Scrutiny",
+      "url": "/icons/dashboard/scrutiny.png"
+    },
+    {
+      "id": "scrypted",
+      "name": "Scrypted",
+      "url": "/icons/dashboard/scrypted.png"
+    },
+    {
+      "id": "searxng",
+      "name": "SearXNG",
+      "url": "/icons/dashboard/searxng.png"
+    },
+    {
+      "id": "sonarr",
+      "name": "Sonarr",
+      "url": "/icons/dashboard/sonarr.png"
+    },
+    {
+      "id": "speedtest-tracker",
+      "name": "Speedtest Tracker",
+      "url": "/icons/dashboard/speedtest-tracker.png"
+    },
+    {
+      "id": "stirling-pdf",
+      "name": "Stirling-PDF",
+      "url": "/icons/dashboard/stirling-pdf.png"
+    },
+    {
+      "id": "syncthing",
+      "name": "Syncthing",
+      "url": "/icons/dashboard/syncthing.png"
+    },
+    {
+      "id": "synology",
+      "name": "Synology",
+      "url": "/icons/dashboard/synology.png"
+    },
+    {
+      "id": "tailscale",
+      "name": "Tailscale",
+      "url": "/icons/dashboard/tailscale.png"
+    },
+    {
+      "id": "tautulli",
+      "name": "Tautulli",
+      "url": "/icons/dashboard/tautulli.png"
+    },
+    {
+      "id": "tdarr",
+      "name": "Tdarr",
+      "url": "/icons/dashboard/tdarr.png"
+    },
+    {
+      "id": "telegram",
+      "name": "Telegram",
+      "url": "/icons/dashboard/telegram.png"
+    },
+    {
+      "id": "traefik",
+      "name": "Traefik",
+      "url": "/icons/dashboard/traefik.png"
+    },
+    {
+      "id": "transmission",
+      "name": "Transmission",
+      "url": "/icons/dashboard/transmission.png"
+    },
+    {
+      "id": "truenas",
+      "name": "TrueNAS",
+      "url": "/icons/dashboard/truenas.png"
+    },
+    {
+      "id": "umami",
+      "name": "Umami",
+      "url": "/icons/dashboard/umami.png"
+    },
+    {
+      "id": "unbound",
+      "name": "Unbound",
+      "url": "/icons/dashboard/unbound.png"
+    },
+    {
+      "id": "unifi",
+      "name": "UniFi",
+      "url": "/icons/dashboard/unifi.png"
+    },
+    {
+      "id": "unraid",
+      "name": "Unraid",
+      "url": "/icons/dashboard/unraid.png"
+    },
+    {
+      "id": "uptime-kuma",
+      "name": "Uptime Kuma",
+      "url": "/icons/dashboard/uptime-kuma.png"
+    },
+    {
+      "id": "vaultwarden",
+      "name": "Vaultwarden",
+      "url": "/icons/dashboard/vaultwarden.png"
+    },
+    {
+      "id": "wallabag",
+      "name": "Wallabag",
+      "url": "/icons/dashboard/wallabag.png"
+    },
+    {
+      "id": "watchtower",
+      "name": "Watchtower",
+      "url": "/icons/dashboard/watchtower.png"
+    },
+    {
+      "id": "wireguard",
+      "name": "WireGuard",
+      "url": "/icons/dashboard/wireguard.png"
+    },
+    {
+      "id": "zigbee2mqtt",
+      "name": "Zigbee2MQTT",
+      "url": "/icons/dashboard/zigbee2mqtt.png"
+    }
+  ]
+}
