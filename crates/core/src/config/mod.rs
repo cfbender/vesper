@@ -1,10 +1,28 @@
 //! Directory-backed YAML configuration: loading, validation, provenance and
 //! safe, source-aware saving. See `docs/configuration.md` for the layout.
 
+mod assemble;
+mod fs;
+mod save;
+mod schema;
+mod validate;
+mod yaml;
+
 use crate::model::{Config, Machine, Service};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
+
+pub use validate::validate;
+
+/// Maximum length of a machine, service or check ID, in bytes.
+pub const MAX_ID_BYTES: usize = 80;
+
+/// Whether `id` is a valid machine, service or check ID: 1 to
+/// [`MAX_ID_BYTES`] ASCII letters, digits, `-` and `_`, and not `_index`.
+pub fn is_valid_id(id: &str) -> bool {
+    assemble::is_valid_id(id)
+}
 
 /// A validated configuration together with where each part came from.
 #[derive(Debug, Clone, PartialEq)]
@@ -14,7 +32,9 @@ pub struct LoadedConfig {
     /// configuration file or the directory layout changes.
     pub revision: String,
     /// Logical path (`machines/jelly/services/media`) to the root-relative
-    /// YAML file that defines it.
+    /// YAML file that defines it. Machines, services, checks and the
+    /// `defaults`, `network` and `telegram` sections are listed. A path
+    /// ending in `/` is a directory without an `_index.yaml`.
     pub sources: BTreeMap<String, String>,
     /// Whether Vesper may write to the configuration root.
     pub writable: bool,
@@ -55,37 +75,138 @@ impl std::fmt::Display for SaveError {
 impl std::error::Error for SaveError {}
 
 /// Loads and validates the configuration rooted at the directory `root`.
-pub fn load(_root: &Path) -> Result<LoadedConfig> {
-    bail!("configuration loading is not implemented yet")
+///
+/// Returns an error (and nothing partial) when any file is malformed, the
+/// layout is ambiguous, or validation fails; callers keep their last valid
+/// [`LoadedConfig`] in that case.
+pub fn load(root: &Path) -> Result<LoadedConfig> {
+    let root = fs::root_dir(root)?;
+    let _lock = fs::RootLock::acquire(&root, false)?;
+    let tree = fs::scan(&root)?;
+    let (assembled, config) = assemble::assemble(&tree)?;
+    validate(&config)?;
+    Ok(LoadedConfig {
+        config,
+        revision: tree.revision(),
+        sources: assembled.sources(),
+        writable: fs::writable(&root, &tree),
+    })
 }
 
-/// Validates a configuration assembled from any source.
-pub fn validate(_config: &Config) -> Result<()> {
-    Ok(())
-}
-
-/// Saves one service into the file that owns it.
+/// Saves one service (new or existing) on an existing machine, editing only
+/// the files that define it.
 pub fn save_service(
-    _root: &Path,
-    _expected_revision: &str,
-    _machine_id: &str,
-    _service_id: &str,
-    _service: &Service,
+    root: &Path,
+    expected_revision: &str,
+    machine_id: &str,
+    service_id: &str,
+    service: &Service,
 ) -> Result<LoadedConfig> {
-    bail!("configuration saving is not implemented yet")
+    if !is_valid_id(machine_id) || !is_valid_id(service_id) {
+        bail!("machine and service IDs use ASCII letters, digits, '-' and '_' (at most {MAX_ID_BYTES} bytes)");
+    }
+    save_with(root, expected_revision, |config| {
+        let machine = config.machines.get_mut(machine_id).with_context(|| {
+            format!("machine `{machine_id}` does not exist; save the machine first")
+        })?;
+        machine
+            .services
+            .insert(service_id.to_string(), service.clone());
+        Ok(())
+    })
 }
 
-/// Saves machine fields, or creates a new machine.
+/// Creates a machine (including any services it carries) or updates an
+/// existing machine's own fields. For an existing machine `machine.services`
+/// must be empty or identical to the current services; services are
+/// changed with [`save_service`].
 pub fn save_machine(
-    _root: &Path,
-    _expected_revision: &str,
-    _machine_id: &str,
-    _machine: &Machine,
+    root: &Path,
+    expected_revision: &str,
+    machine_id: &str,
+    machine: &Machine,
 ) -> Result<LoadedConfig> {
-    bail!("configuration saving is not implemented yet")
+    if !is_valid_id(machine_id) {
+        bail!("machine IDs use ASCII letters, digits, '-' and '_' (at most {MAX_ID_BYTES} bytes)");
+    }
+    save_with(root, expected_revision, |config| {
+        match config.machines.get_mut(machine_id) {
+            Some(current) => {
+                if !machine.services.is_empty() && machine.services != current.services {
+                    bail!("saving a machine does not change its services; save each service separately");
+                }
+                let services = std::mem::take(&mut current.services);
+                *current = Machine {
+                    services,
+                    ..machine.clone()
+                };
+            }
+            None => {
+                config
+                    .machines
+                    .insert(machine_id.to_string(), machine.clone());
+            }
+        }
+        Ok(())
+    })
 }
 
-/// Renders a service as standalone YAML (the content of `services/<id>.yaml`).
-pub fn export_service(_service: &Service) -> Result<String> {
-    bail!("export is not implemented yet")
+fn save_with(
+    root: &Path,
+    expected_revision: &str,
+    change: impl FnOnce(&mut Config) -> Result<()>,
+) -> Result<LoadedConfig> {
+    let root = fs::root_dir(root)?;
+    {
+        let _lock = fs::RootLock::acquire(&root, true)?;
+        let tree = fs::scan(&root)?;
+        if !fs::writable(&root, &tree) {
+            return Err(SaveError::ReadOnly.into());
+        }
+        let revision = tree.revision();
+        if revision != expected_revision {
+            return Err(SaveError::Conflict {
+                current_revision: revision,
+            }
+            .into());
+        }
+        let (assembled, current) = assemble::assemble(&tree)?;
+        validate(&current).context("the configuration on disk is invalid; fix it before saving")?;
+        let mut next = current.clone();
+        change(&mut next)?;
+        validate(&next)?;
+        let old_v = serde_json::to_value(&current)?;
+        let new_v = serde_json::to_value(&next)?;
+        let ops = save::plan(&assembled, &old_v, &new_v)?;
+        // Prove the edit before touching disk: the edited tree must assemble
+        // into exactly the requested configuration.
+        let mut edited = tree.clone();
+        edited.apply(&ops);
+        match assemble::assemble(&edited) {
+            Ok((_, check)) if check == next => {}
+            _ => {
+                return Err(SaveError::ExportOnly {
+                    reason: "the edited files could not be verified to produce this configuration"
+                        .into(),
+                }
+                .into())
+            }
+        }
+        fs::commit(&root, &ops)?;
+    }
+    load(&root)
+}
+
+/// Renders a service as standalone YAML: the content of a
+/// `machines/<machine>/services/<service>.yaml` file. Secret references
+/// stay references.
+pub fn export_service(service: &Service) -> Result<String> {
+    let v = serde_json::to_value(service)?;
+    Ok(save::document(&schema::shape(schema::Pos::Service, &v)))
+}
+
+/// Renders a whole configuration as one root `_index.yaml`.
+pub fn export_config(config: &Config) -> Result<String> {
+    let v = serde_json::to_value(config)?;
+    Ok(save::document(&schema::shape(schema::Pos::Root, &v)))
 }
