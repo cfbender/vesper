@@ -52,7 +52,18 @@ pub enum Raw<'a> {
 #[derive(Debug, Clone, Copy)]
 pub enum Slot<'a> {
     Root,
+    /// A value in a block mapping.
     Entry(&'a Entry),
+    /// A value in a flow mapping (`{a: 1}`).
+    FlowEntry(&'a Entry),
+}
+
+fn entry_slot<'a>(map: &Node, e: &'a Entry) -> Slot<'a> {
+    if map.flow {
+        Slot::FlowEntry(e)
+    } else {
+        Slot::Entry(e)
+    }
 }
 
 impl Assembled {
@@ -79,7 +90,7 @@ impl Assembled {
                             Raw::Yaml {
                                 file,
                                 node: Some(&e.value),
-                                slot: Slot::Entry(e),
+                                slot: entry_slot(node, e),
                             },
                         )
                     })
@@ -94,14 +105,15 @@ impl Assembled {
                     let raw = match entry {
                         DirEntry::Index => {
                             let file = d.index.as_deref().expect("index entry without index");
-                            let entry = index_entries(&self.docs[file])
+                            let doc = &self.docs[file];
+                            let entry = index_entries(doc)
                                 .iter()
                                 .find(|e| &e.key == k)
                                 .expect("index entry");
                             Raw::Yaml {
                                 file,
                                 node: Some(&entry.value),
-                                slot: Slot::Entry(entry),
+                                slot: entry_slot(doc.root.as_ref().expect("index root"), entry),
                             }
                         }
                         DirEntry::File(f) => Raw::Yaml {

@@ -81,8 +81,15 @@ impl<'a> Planner<'a> {
         match raw {
             Raw::Dir(d) => self.diff_dir(d, pos, old, new),
             Raw::Yaml { file, node, slot } => match node {
-                Some(n) if matches!(n.kind, Kind::Map(_)) && !n.flow && new.is_object() => {
-                    self.diff_map(file, n, slot, pos, old, new)
+                Some(n) if matches!(n.kind, Kind::Map(_)) && new.is_object() => {
+                    if n.flow {
+                        self.diff_flow_map(file, n, pos, old, new)
+                    } else {
+                        self.diff_map(file, n, slot, pos, old, new)
+                    }
+                }
+                Some(n) if matches!(slot, Slot::FlowEntry(_)) => {
+                    self.replace_flow(file, n, slot, pos, new)
                 }
                 Some(n) => self.replace(file, n, slot, pos, new, false),
                 None => self.fill_empty_doc(file, pos, new),
@@ -97,80 +104,186 @@ impl<'a> Planner<'a> {
                 d.path
             )));
         };
-        let children: BTreeMap<&str, Raw<'a>> = self.a.children(Raw::Dir(d)).into_iter().collect();
-        for (&key, &raw) in &children {
+        // Keys defined in `_index.yaml` (and new fields that belong there)
+        // are diffed as that file's mapping.
+        let mut index_old = Map::new();
+        let mut index_new = Map::new();
+        for (key, entry) in &d.entries {
+            if matches!(entry, DirEntry::Index) {
+                index_old.insert(key.clone(), get(old, key).clone());
+                index_new.insert(key.clone(), get(new, key).clone());
+            }
+        }
+        for (key, raw) in self.a.children(Raw::Dir(d)) {
             let (o, n) = (get(old, key), get(new, key));
             if o == n {
                 continue;
             }
-            if n.is_null() {
-                match &d.entries[key] {
-                    DirEntry::Index => {
-                        let Raw::Yaml {
-                            file,
-                            slot: Slot::Entry(e),
-                            ..
-                        } = raw
-                        else {
-                            unreachable!()
-                        };
-                        self.delete_entry(file, e)?;
-                    }
-                    DirEntry::File(f) => self.deletes.push(f.clone()),
-                    DirEntry::Dir(sub) => {
-                        return Err(export_only(format!(
-                            "removing directory {}/ is not supported",
-                            sub.path
-                        )))
-                    }
+            match &d.entries[key] {
+                DirEntry::Index => {}
+                DirEntry::File(f) if n.is_null() => self.deletes.push(f.clone()),
+                DirEntry::Dir(sub) if n.is_null() => {
+                    return Err(export_only(format!(
+                        "removing directory {}/ is not supported",
+                        sub.path
+                    )))
                 }
-            } else {
-                self.diff(raw, pos.child(key), o, n)?;
+                _ => self.diff(raw, pos.child(key), o, n)?,
             }
         }
-        for key in pos.ordered_keys(new_o.keys().filter(|k| !children.contains_key(k.as_str()))) {
+        for key in pos.ordered_keys(new_o.keys().filter(|k| !d.entries.contains_key(k.as_str()))) {
             let n = &new_o[&key];
             if get(old, &key) == n || n.is_null() || !pos.is_collection() && pos.omit(&key, n) {
                 continue;
             }
-            self.insert_dir_entry(d, pos, &key, n)?;
+            let child = pos.child(&key);
+            if pos.is_collection() {
+                let siblings_are_dirs = d.entries.values().any(|e| matches!(e, DirEntry::Dir(_)));
+                if child.allows_dir() && siblings_are_dirs {
+                    self.new_dir(&join(&d.path, &key), child, n);
+                } else {
+                    self.new_file(&join(&d.path, &format!("{key}.yaml")), child, n);
+                }
+            } else if child.is_collection() && pos.split_fields().contains(&key.as_str()) {
+                self.new_dir(&join(&d.path, &key), child, n);
+            } else if d.index.is_some() {
+                index_new.insert(key.clone(), n.clone());
+            } else {
+                self.new_files
+                    .entry(join(&d.path, INDEX))
+                    .or_default()
+                    .push((key.clone(), shape(child, n)));
+            }
+        }
+        if let Some(file) = &d.index {
+            let raw = Raw::Yaml {
+                file,
+                node: self.a.doc(file).root.as_ref(),
+                slot: Slot::Root,
+            };
+            self.diff(
+                raw,
+                pos,
+                &Value::Object(index_old),
+                &Value::Object(index_new),
+            )?;
         }
         Ok(())
     }
 
-    fn insert_dir_entry(&mut self, d: &DirNode, pos: Pos, key: &str, n: &Value) -> Result<()> {
-        let child = pos.child(key);
-        if pos.is_collection() {
-            let siblings_are_dirs = d.entries.values().any(|e| matches!(e, DirEntry::Dir(_)));
-            if child.allows_dir() && siblings_are_dirs {
-                self.new_dir(&join(&d.path, key), child, n);
-            } else {
-                self.new_file(&join(&d.path, &format!("{key}.yaml")), child, n);
-            }
-        } else if child.is_collection() && pos.split_fields().contains(&key) {
-            self.new_dir(&join(&d.path, key), child, n);
-        } else {
-            match &d.index {
-                Some(file) => {
-                    let doc = self.a.doc(file);
-                    match &doc.root {
-                        Some(root) if matches!(root.kind, Kind::Map(_)) && !root.flow => self
-                            .insert_entries(file, root, vec![(key.to_string(), shape(child, n))])?,
-                        None => {
-                            self.append_to_empty(file, vec![(key.to_string(), shape(child, n))])
-                        }
-                        Some(_) => {
-                            return Err(export_only(format!("{file} is not a block mapping")))
-                        }
-                    }
-                }
-                None => self
-                    .new_files
-                    .entry(join(&d.path, INDEX))
-                    .or_default()
-                    .push((key.to_string(), shape(child, n))),
+    /// Edits a flow mapping (`{a: 1, b: 2}`, including JSON) in place:
+    /// changed values are replaced within their span, removed entries lose
+    /// their text and separator, new entries are added after the last one.
+    fn diff_flow_map(
+        &mut self,
+        file: &'a str,
+        map: &'a Node,
+        pos: Pos,
+        old: &Value,
+        new: &Value,
+    ) -> Result<()> {
+        let Kind::Map(entries) = &map.kind else {
+            unreachable!()
+        };
+        let new_o = new.as_object().expect("checked by caller");
+        let json = self.json_style(file, map);
+        let deleted: Vec<bool> = entries
+            .iter()
+            .map(|e| get(old, &e.key) != get(new, &e.key) && get(new, &e.key).is_null())
+            .collect();
+        for (e, &del) in entries.iter().zip(&deleted) {
+            let (o, n) = (get(old, &e.key), get(new, &e.key));
+            if !del && o != n {
+                let raw = Raw::Yaml {
+                    file,
+                    node: Some(&e.value),
+                    slot: Slot::FlowEntry(e),
+                };
+                self.diff(raw, pos.child(&e.key), o, n)?;
             }
         }
+        let end = |e: &yaml::Entry| e.value.end.max(e.key_end);
+        let trailing = deleted.iter().rposition(|d| !d).map_or(0, |i| i + 1);
+        for i in 0..trailing {
+            if deleted[i] {
+                self.push_edit(
+                    file,
+                    entries[i].key_start,
+                    entries[i + 1].key_start,
+                    String::new(),
+                );
+            }
+        }
+        if trailing < entries.len() {
+            let start = if trailing == 0 {
+                entries[0].key_start
+            } else {
+                end(&entries[trailing - 1])
+            };
+            self.push_edit(file, start, end(&entries[entries.len() - 1]), String::new());
+        }
+        let inserts: Vec<String> = pos
+            .ordered_keys(
+                new_o
+                    .keys()
+                    .filter(|k| !entries.iter().any(|e| &e.key == *k)),
+            )
+            .into_iter()
+            .filter(|k| {
+                let n = &new_o[k];
+                !(get(old, k) == n || n.is_null() || !pos.is_collection() && pos.omit(k, n))
+            })
+            .map(|k| {
+                let v = emit_flow(&shape(pos.child(&k), &new_o[&k]), json);
+                format!("{}: {v}", flow_key(&k, json))
+            })
+            .collect();
+        if !inserts.is_empty() {
+            let text = inserts.join(", ");
+            if trailing == 0 {
+                self.push_edit(file, map.start + 1, map.start + 1, text);
+            } else {
+                let at = end(&entries[trailing - 1]);
+                self.push_edit(file, at, at, format!(", {text}"));
+            }
+        }
+        Ok(())
+    }
+
+    /// A flow mapping written as JSON (double-quoted keys) stays JSON.
+    fn json_style(&self, file: &str, map: &Node) -> bool {
+        match &map.kind {
+            Kind::Map(entries) => entries
+                .first()
+                .is_some_and(|e| self.a.doc(file).text.as_bytes()[e.key_start] == b'"'),
+            _ => false,
+        }
+    }
+
+    fn replace_flow(
+        &mut self,
+        file: &str,
+        node: &Node,
+        slot: Slot<'_>,
+        pos: Pos,
+        new: &Value,
+    ) -> Result<()> {
+        let Slot::FlowEntry(e) = slot else {
+            unreachable!()
+        };
+        let doc = self.a.doc(file);
+        if doc.has_comment_in(node.start, node.end) {
+            return Err(export_only(format!(
+                "{file}: `{}` contains comments that would be lost",
+                yaml::safe_key(&e.key)
+            )));
+        }
+        let json = doc.text.as_bytes()[e.key_start] == b'"';
+        let mut text = emit_flow(&shape(pos, new), json);
+        if node.start == node.end && doc.text[..node.start].ends_with(':') {
+            text.insert(0, ' ');
+        }
+        self.push_edit(file, node.start, node.end, text);
         Ok(())
     }
 
@@ -254,7 +367,7 @@ impl<'a> Planner<'a> {
                     }
                     Ok(())
                 }
-                Slot::Entry(_) => self.replace(file, map, slot, pos, new, true),
+                _ => self.replace(file, map, slot, pos, new, true),
             };
         }
         for e in entries {
@@ -385,6 +498,7 @@ impl<'a> Planner<'a> {
         let out = shape(pos, new);
         let doc = self.a.doc(file);
         match slot {
+            Slot::FlowEntry(_) => unreachable!("flow entries use replace_flow"),
             Slot::Root => {
                 if doc.has_comments() && !allow_loss {
                     return Err(export_only(format!(
@@ -440,6 +554,37 @@ impl<'a> Planner<'a> {
         }
         ops.extend(self.deletes.into_iter().map(Op::Delete));
         Ok(ops)
+    }
+}
+
+fn flow_key(k: &str, json: bool) -> String {
+    if json {
+        serde_json::to_string(k).expect("json")
+    } else {
+        emit_str(k)
+    }
+}
+
+/// One-line flow form; JSON when `json` is set.
+fn emit_flow(v: &Out, json: bool) -> String {
+    match v {
+        Out::Scalar(s) if json => serde_json::to_string(s).expect("json"),
+        Out::Scalar(s) => yaml::emit_scalar(s),
+        Out::Seq(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(|i| emit_flow(i, json))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Out::Map(m) => format!(
+            "{{{}}}",
+            m.iter()
+                .map(|(k, v)| format!("{}: {}", flow_key(k, json), emit_flow(v, json)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 

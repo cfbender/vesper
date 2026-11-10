@@ -102,8 +102,18 @@ fn read_secret_file(name: &str, secrets_root: &Path) -> Result<String> {
     if !target.starts_with(&root) || target == root {
         bail!("secret file {name} resolves outside the secrets directory");
     }
-    let mut file = std::fs::File::open(&target)
-        .with_context(|| format!("secret file {name} cannot be opened"))?;
+    // The canonical path contains no symlinks; refuse one swapped in since.
+    let fd = rustix::fs::open(
+        &target,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::NONBLOCK
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|e| std::io::Error::from_raw_os_error(e.raw_os_error()))
+    .with_context(|| format!("secret file {name} cannot be opened"))?;
+    let mut file = std::fs::File::from(fd);
     let meta = file
         .metadata()
         .with_context(|| format!("secret file {name} cannot be inspected"))?;

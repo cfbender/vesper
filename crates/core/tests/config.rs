@@ -908,3 +908,48 @@ fn export_config_round_trips() {
     write(e.path(), "_index.yaml", &text);
     assert_eq!(loaded(e.path()).config, l.config);
 }
+
+#[test]
+fn json_formatted_yaml_is_edited_in_place_and_stays_json() {
+    for text in ["{\"machines\": {\"m\": {\"name\": \"M\", \"services\": {\"s\": {\"name\": \"S\", \"checks\": {\"web\": {\"kind\": \"http\", \"url\": \"http://10.0.0.1/\"}, \"old\": {\"kind\": \"tcp\", \"host\": \"h\", \"port\": 1}}}}}}}\n", "{\n  \"machines\": {\n    \"m\": {\n      \"name\": \"M\",\n      \"services\": {\n        \"s\": {\n          \"name\": \"S\",\n          \"checks\": {\n            \"web\": {\n              \"kind\": \"http\",\n              \"url\": \"http://10.0.0.1/\"\n            },\n            \"old\": {\n              \"kind\": \"tcp\",\n              \"host\": \"h\",\n              \"port\": 1\n            }\n          }\n        }\n      }\n    }\n  }\n}\n"] {
+        let d = tempfile::tempdir().unwrap();
+        write(d.path(), "_index.yaml", text);
+        let l = loaded(d.path());
+        let mut svc = l.config.machines["m"].services["s"].clone();
+        svc.name = "Renamed: \"S\"".into();
+        svc.checks.remove("old");
+        svc.checks.get_mut("web").unwrap().port = None;
+        svc.checks.get_mut("web").unwrap().headers.insert("X-Key".into(), SecretRef::Env("KEY".into()));
+        svc.paused = true;
+        let after = config::save_service(d.path(), &l.revision, "m", "s", &svc).unwrap();
+        assert_eq!(after.config.machines["m"].services["s"], svc);
+        let written = read(d.path(), "_index.yaml");
+        let json: serde_json::Value = serde_json::from_str(&written).unwrap_or_else(|e| panic!("{e}: {written}"));
+        assert_eq!(json["machines"]["m"]["services"]["s"]["name"], "Renamed: \"S\"");
+        assert_eq!(json["machines"]["m"]["services"]["s"]["checks"]["web"]["headers"]["X-Key"]["env"], "KEY");
+        assert!(json["machines"]["m"]["services"]["s"]["checks"].get("old").is_none());
+        // Only the edited regions changed: the machine prefix is intact.
+        let prefix = &text[..text.find("\"services\"").unwrap()];
+        assert!(written.starts_with(prefix));
+    }
+}
+
+#[test]
+fn probe_controlled_settings_are_validated() {
+    let d = tempfile::tempdir().unwrap();
+    write(
+        d.path(),
+        "_index.yaml",
+        "network:\n  private_ca_file: /etc/ssl/ca.pem\n",
+    );
+    assert!(err(d.path()).contains("private_ca_file: must be a plain file name"));
+    for h in ["Transfer-Encoding", "connection", "TE", "Upgrade"] {
+        let d = tempfile::tempdir().unwrap();
+        write(
+            d.path(),
+            "_index.yaml",
+            &format!("machines:\n  m:\n    services:\n      s:\n        checks:\n          c: {{kind: http, url: 'http://x/', headers: {{{h}: {{env: K}}}}}}\n"),
+        );
+        assert!(err(d.path()).contains("cannot be set"), "{h}");
+    }
+}

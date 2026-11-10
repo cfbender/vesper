@@ -8,6 +8,15 @@ use anyhow::{bail, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 
+/// Hop-by-hop and framing headers the probe controls itself.
+const FORBIDDEN_HEADERS: &[&str] = &[
+    "host",
+    "connection",
+    "content-length",
+    "transfer-encoding",
+    "upgrade",
+    "te",
+];
 const MAX_DESCRIPTION: usize = 4000;
 const MAX_INTERVAL: u64 = 7 * 24 * 3600;
 
@@ -251,8 +260,11 @@ fn check_network(config: &Config, errors: &mut Vec<String>) {
         errors.push("network.max_response_bytes: must be between 1 and 67108864".into());
     }
     if let Some(ca) = &n.private_ca_file {
-        if ca.is_empty() || ca.contains('\0') {
-            errors.push("network.private_ca_file: must be a file path".into());
+        if !is_valid_file_name(ca) {
+            errors.push(
+                "network.private_ca_file: must be a plain file name inside the secrets directory"
+                    .into(),
+            );
         }
     }
 }
@@ -328,8 +340,9 @@ fn check_check(path: &str, c: &Check, defaults: &CheckDefaults, errors: &mut Vec
                         "{path}.headers: invalid header name `{}`",
                         super::yaml::safe_key(name)
                     ));
-                } else if name.eq_ignore_ascii_case("host")
-                    || name.eq_ignore_ascii_case("content-length")
+                } else if FORBIDDEN_HEADERS
+                    .iter()
+                    .any(|h| name.eq_ignore_ascii_case(h))
                 {
                     errors.push(format!("{path}.headers: `{name}` cannot be set"));
                 }
