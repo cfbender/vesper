@@ -1,0 +1,18 @@
+[workspace]
+members = ["crates/core"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+vesper-core = { path = "crates/core" }
+vesper-probe = { path = "crates/probe" }
+vesper-engine = { path = "crates/engine" }

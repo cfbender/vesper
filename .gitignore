@@ -1,0 +1,8 @@
+/target/
+/web/node_modules/
+/web/dist/
+/.amp/
+*.db
+*.db-shm
+*.db-wal
+.env
