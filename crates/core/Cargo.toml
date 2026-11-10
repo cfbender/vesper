@@ -8,6 +8,7 @@ license.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+vesper-notify.workspace = true
 chrono.workspace = true
 saphyr-parser = "0.3.3"
 sha2 = "0.11.1"

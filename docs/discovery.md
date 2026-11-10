@@ -69,7 +69,7 @@ environment:
   VESPER_DISCOVER_ALLOWED_SECRETS: '{"docker1":[{"file":"app-token"},{"file":"app-push"}],"docker2":[{"env":"NAS_API_TOKEN"}]}'
 ```
 
-The machine IDs must also appear in `VESPER_DISCOVER_DOCKER`. Malformed grants prevent startup without echoing their contents. Granting a reference trusts **every label writer on that machine with that credential**: they can send it in a header to any allowed target, including plain HTTP. Use dedicated, least-privilege credentials; do not grant Vesper's Telegram bot token or another machine's credentials. A socket proxy limits Docker access, not what an allowed credential can be used for.
+The machine IDs must also appear in `VESPER_DISCOVER_DOCKER`. Malformed grants prevent startup without echoing their contents. Granting a reference trusts **every label writer on that machine with that credential**: they can send it in a header to any allowed target, including plain HTTP. Use dedicated, least-privilege credentials; do not grant Vesper's notification credentials or another machine's credentials. A socket proxy limits Docker access, not what an allowed credential can be used for.
 
 To revoke a grant, remove it and recreate Vesper while keeping that machine in discovery. Before starting probes, Vesper pauses any still-managed service using an ungranted reference, even if Docker is unavailable. Restoring the grant or supplying safe replacement labels lets discovery restore the declared pause state. Pausing stops future uses; it cannot undo a previous disclosure, so rotate exposed credentials. Hand-written or edited/detached files are administrator-owned and must be changed manually. Disabling discovery or removing a source is **not** revocation: generated YAML remains active.
 
@@ -163,7 +163,7 @@ Discovery deliberately covers one source well rather than everything AutoKuma do
 
 - **Included:** Docker container labels (running or stopped) from local or proxied endpoints, multiple machines, HTTP/TCP/push checks with every per-check field, service names, icons, descriptions, notifications, pausing and `depends_on`.
 - **Not included:** Docker Swarm services, Kubernetes, file sources (Vesper's YAML already is one), templating and snippets, default settings per source, maintenance windows from labels, TLS or client-certificate Docker endpoints, Docker event streaming (scans poll), creating machines, and an indicator in the dashboard. Generated files show their source path in the service page like any other service.
-- Notifications: discovered services default to `notifications: true` like hand-written ones; nothing is sent unless Telegram is configured. Set `vesper.<service>.notifications: "false"` to opt a service out.
+- Notifications: discovered services default to `notifications: true` like hand-written ones; nothing is sent unless notification channels are configured. Set `vesper.<service>.notifications: "false"` to opt a service out.
 - With Git-managed configuration, generated files appear as new files in the working tree; commit them or keep discovery out of that checkout.
 
 ## Troubleshooting

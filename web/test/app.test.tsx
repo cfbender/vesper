@@ -79,19 +79,19 @@ describe("API client", () => {
     let tokens = 0;
     routes["GET /api/csrf"] = () => json(200, { token: `tok-${++tokens}` });
     let attempts = 0;
-    routes["POST /api/telegram/test"] = (init) => {
+    routes["POST /api/notifications/telegram/test"] = (init) => {
       attempts++;
       const h = init.headers as Record<string, string>;
       return h["X-Vesper-CSRF"] === "tok-2" ? json(200, { message: "sent" }) : json(403, { error: "bad token" });
     };
-    await expect(api.testTelegram()).resolves.toEqual({ message: "sent" });
+    await expect(api.testChannel("telegram")).resolves.toEqual({ message: "sent" });
     expect(attempts).toBe(2);
     expect(tokens).toBe(2);
   });
 
   it("surfaces the server's safe error text", async () => {
-    routes["POST /api/telegram/test"] = () => json(502, { error: "Telegram rejected the bot token (401)." });
-    await expect(api.testTelegram()).rejects.toThrow("Telegram rejected the bot token (401).");
+    routes["POST /api/notifications/telegram/test"] = () => json(502, { error: "Telegram rejected the bot token (401)." });
+    await expect(api.testChannel("telegram")).rejects.toThrow("Telegram rejected the bot token (401).");
   });
 });
 
@@ -302,11 +302,11 @@ describe("service editor", () => {
 });
 
 describe("settings", () => {
-  it("reports the real Telegram test result", async () => {
+  it("reports the real test result per channel", async () => {
     const user = userEvent.setup();
-    routes["POST /api/telegram/test"] = () => json(502, { error: "Telegram: chat not found (400)." });
+    routes["POST /api/notifications/telegram/test"] = () => json(502, { error: "Telegram: chat not found (400)." });
     renderAt("/settings");
-    await user.click(await screen.findByRole("button", { name: "Send test message" }));
+    await user.click(await screen.findByRole("button", { name: "Send test message to telegram" }));
     expect(await screen.findByText("Telegram: chat not found (400).")).toBeInTheDocument();
     expect(screen.queryByText(/accepted the test message/)).not.toBeInTheDocument();
   });

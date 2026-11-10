@@ -55,7 +55,7 @@ For Git-managed or read-only configuration, mount `/config:ro` and set `VESPER_C
 
 - Set `VESPER_PUBLIC_URL` to the exact external HTTPS origin, including a nonstandard port if used, with no URL path.
 - Set `VESPER_TRUSTED_PROXIES` to the proxy's **immediate TCP peer address**, not client IPs or forwarding headers. Prefer stable `/32` or `/128` addresses. Trust a whole subnet only if it contains exclusively trusted proxies and Vesper; every trusted peer has administrator access. Don't allowlist an entire shared application network.
-- Give Vesper outbound access to the targets you monitor and, if used, Telegram. An internal-only Docker network needs an additional egress network. The probe allowlist below is separate from proxy trust.
+- Give Vesper outbound access to the targets you monitor and, if used, your notification services. An internal-only Docker network needs an additional egress network. The probe allowlist below is separate from proxy trust.
 - Authentication is your choice: reuse your existing middleware, use proxy BasicAuth, or leave it off. Keep `VESPER_DEV_MODE` off in deployments. See [security and optional auth examples](security.md#optional-authentication-examples) for details.
 
 ## Initial configuration
@@ -103,16 +103,19 @@ Check your intended access boundary too: excluded clients must not reach managem
 
 ## Optional notifications and push checks
 
-**Telegram:** create a bot with BotFather, message it or add it to your group, and obtain the chat ID. Mount files named `telegram-bot-token` and `telegram-chat-id` under `/run/secrets`, readable by UID/GID 10001 but not other users. Add this to the root configuration:
+**Notifications:** pick one or more channel kinds from [notifications](notifications.md). For Telegram, create a bot with BotFather, message it or add it to your group, and obtain the chat ID. Mount credential files such as `telegram-bot-token` and `telegram-chat-id` under `/run/secrets`, readable by UID/GID 10001 but not other users. Add this to the root configuration:
 
 ```yaml
-telegram:
-  bot_token: {file: telegram-bot-token}
-  chat_id: {file: telegram-chat-id}
+notifications:
   dashboard_url: https://status.example.com
+  channels:
+    telegram:
+      kind: telegram
+      bot_token: {file: telegram-bot-token}
+      chat_id: {file: telegram-chat-id}
 ```
 
-Use **Settings → Telegram → Send test message** and confirm it arrives in the intended chat. API acceptance alone is not delivery confirmation. Secrets can also use `{env: NAME}` references to variables you supply to the container; never put literal credentials in YAML or paste them into chat.
+A self-hosted service on your LAN, such as Gotify or ntfy, must be inside `network.allowed_cidrs`; public services are reachable without listing them. Use **Settings → Notifications → Send test message** on each channel and confirm it arrives. API acceptance alone is not delivery confirmation. Secrets can also use `{env: NAME}` references to variables you supply to the container; never put literal credentials in YAML or paste them into chat.
 
 **Push checks:** configure `kind: push`, a `token: {file: my-push-token}` reference, and your `expected_interval_seconds` and `grace_seconds`. Send `{"healthy": true}` or `{"healthy": false}` to `POST /api/heartbeat/<machine>/<service>/<check>` with the per-check token in the `Authorization: Bearer …` header, never in the URL. A missed cadence plus grace opens an incident; a healthy heartbeat recovers it.
 

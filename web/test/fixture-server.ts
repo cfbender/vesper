@@ -9,7 +9,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fixtureConfig, fixtureSnapshot, type Scenario } from "./fixtures.ts";
+import { fixtureConfig, fixtureKinds, fixtureSnapshot, type Scenario } from "./fixtures.ts";
 import type { IconEntry } from "../src/types.ts";
 
 const root = fileURLToPath(new URL("../dist/", import.meta.url));
@@ -92,7 +92,9 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL) {
     );
     return send(res, 200, { results });
   }
-  if (p === "/api/telegram/test") return send(res, 200, { message: "Telegram accepted message 1842 for chat ‘homelab’." });
+  const t = p.match(/^\/api\/notifications\/([^/]+)\/test$/);
+  if (t) return send(res, 200, { message: `${t[1]} accepted the test message (acceptance is not a read receipt)` });
+  if (p === "/api/notifications/kinds") return send(res, 200, fixtureKinds);
   let r = p.match(/^\/api\/incidents\/(\d+)\/acknowledge$/);
   if (r) {
     const { acknowledged } = await body(req);

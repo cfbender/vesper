@@ -1,7 +1,7 @@
 # Root of the Vesper configuration (VESPER_CONFIG_DIR, /config in the container).
 #
 # `_index.yaml` contributes fields to the directory that contains it, so this
-# file holds the top-level `defaults`, `network` and `telegram` fields. The
+# file holds the top-level `defaults`, `network` and `notifications` fields. The
 # `machines` mapping comes from the sibling `machines/` directory and therefore
 # must NOT also appear here (that would be an index/child collision).
 
@@ -25,8 +25,19 @@ network:
   # like a `{file: ...}` secret. TLS verification is never disabled.
   private_ca_file: homelab-ca.pem
 
-telegram:
-  bot_token: {file: telegram-bot-token}     # /run/secrets/telegram-bot-token
-  chat_id: {env: VESPER_TELEGRAM_CHAT_ID}   # from the container environment
-  dashboard_url: https://status.example.com
-  # reminder_seconds: 3600                  # opt-in reminders for open incidents
+notifications:
+  dashboard_url: https://status.example.com  # links in messages point here
+  # reminder_seconds: 3600                   # opt-in reminders for open incidents
+  # Every channel receives every notification. Kinds and their settings are
+  # listed in docs/notifications.md and under Settings → Notifications.
+  channels:
+    telegram:
+      kind: telegram
+      bot_token: {file: telegram-bot-token}    # /run/secrets/telegram-bot-token
+      chat_id: {env: VESPER_TELEGRAM_CHAT_ID}  # from the container environment
+    # phone:
+    #   kind: ntfy
+    #   topic: {file: ntfy-topic}              # a private topic is a secret
+    # ops:
+    #   kind: discord
+    #   webhook_url: {file: discord-webhook}

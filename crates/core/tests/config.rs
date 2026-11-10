@@ -420,6 +420,47 @@ fn validation_rejects_semantic_errors() {
 }
 
 #[test]
+fn notification_channels_are_validated_against_their_kind() {
+    let channels = |body: &str| {
+        format!("notifications:\n  dashboard_url: https://vesper.lan\n  channels:\n{body}")
+    };
+    let d = tempfile::tempdir().unwrap();
+    write(
+        d.path(),
+        "_index.yaml",
+        &channels("    phone:\n      kind: ntfy\n      topic: {file: ntfy-topic}\n      priority: 5\n    mail:\n      kind: smtp\n      host: smtp.example.com\n      from: v@example.com\n      to: [a@example.com, b@example.com]\n      password: {env: SMTP_PASSWORD}\n"),
+    );
+    let loaded = config::load(d.path()).unwrap();
+    let n = loaded.config.effective_notifications().unwrap();
+    assert_eq!(n.channels["phone"].kind, "ntfy");
+    assert_eq!(loaded.sources["notifications"], "_index.yaml");
+
+    for (body, expected) in [
+        ("    x:\n      kind: carrier_pigeon\n", "notifications.channels.x.kind: names no known channel kind"),
+        ("    x:\n      kind: ntfy\n", "notifications.channels.x.topic: required"),
+        ("    x:\n      kind: ntfy\n      topic: t\n      colour: red\n", "notifications.channels.x.colour: not a setting of kind ntfy"),
+        ("    x:\n      kind: discord\n      webhook_url: https://discord.com/api/webhooks/1/abc\n", "notifications.channels.x.webhook_url: credentials must be secret references"),
+        ("    x:\n      kind: ntfy\n      topic: t\n      priority: 9\n", "notifications.channels.x.priority: must be one of: 1, 2, 3, 4, 5"),
+        ("    x:\n      kind: ntfy\n      topic: t\n      server_url: ftp://ntfy.lan\n", "notifications.channels.x.server_url: must be an absolute http(s) URL"),
+        ("    x:\n      kind: smtp\n      host: h\n      from: f\n      to: a@b.c\n      port: many\n", "notifications.channels.x.port: must be an integer"),
+        ("    x:\n      kind: ntfy\n      topic: t\n      access_token: {file: ../t}\n", "notifications.channels.x.access_token: file reference must be a plain file name"),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        write(d.path(), "_index.yaml", &channels(body));
+        let e = err(d.path());
+        assert!(e.contains(expected), "{body}: {e}");
+    }
+
+    let d = tempfile::tempdir().unwrap();
+    write(
+        d.path(),
+        "_index.yaml",
+        "telegram:\n  bot_token: {env: T}\n  chat_id: {env: C}\n  dashboard_url: https://v.lan\nnotifications:\n  dashboard_url: https://v.lan\n",
+    );
+    assert!(err(d.path()).contains("both cannot be set"));
+}
+
+#[test]
 fn errors_never_echo_misplaced_secret_values() {
     let secret = "hunter2-SUPERSECRET";
     let layouts = [
@@ -430,6 +471,9 @@ fn errors_never_echo_misplaced_secret_values() {
         format!("machines:\n  m:\n    services:\n      s:\n        checks:\n          c:\n            kind: push\n            token: {{file: '{secret}/x'}}\n"),
         format!("machines:\n  m:\n    services:\n      s:\n        checks:\n          c:\n            kind: push\n            port: {secret}\n"),
         format!("machines:\n  '{secret} x': {{}}\n"),
+        format!("notifications:\n  dashboard_url: https://v.lan\n  channels:\n    d:\n      kind: discord\n      webhook_url: https://discord.com/api/webhooks/1/{secret}\n"),
+        format!("notifications:\n  dashboard_url: https://v.lan\n  channels:\n    d:\n      kind: ntfy\n      topic: t\n      bogus_{secret}: 1\n"),
+        format!("notifications:\n  dashboard_url: https://v.lan\n  channels:\n    d:\n      kind: ntfy\n      topic: t\n      server_url: 'https://u:{secret}@ntfy.lan'\n"),
     ];
     for yaml in layouts {
         let d = tempfile::tempdir().unwrap();

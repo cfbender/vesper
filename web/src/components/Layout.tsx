@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useLive } from "../data";
 import { ago, localTime } from "../format";
 import { Link, paths, useRoute, type Route } from "../router";
+import type { ChannelView } from "../types";
 import { Notice } from "./ui";
 
 function section(route: Route): "overview" | "incidents" | "settings" | null {
@@ -105,7 +106,7 @@ export function Layout({ children }: { children: ReactNode }) {
               : `Disconnected · snapshot from ${localTime(snapshot.generated_at)}`
             : "Connecting…"}
         </span>
-        {snapshot && <span>Telegram: {snapshot.telegram || "unknown"}</span>}
+        {snapshot && <span>{notificationSummary(snapshot.notifications)}</span>}
         {snapshot && (
           <span>
             Config <code>{short(snapshot.config_revision)}</code>
@@ -118,3 +119,10 @@ export function Layout({ children }: { children: ReactNode }) {
 }
 
 export const short = (rev: string) => (rev.length > 12 ? rev.slice(0, 12) : rev);
+
+function notificationSummary(channels: ChannelView[]): string {
+  if (!channels?.length) return "Notifications: not configured";
+  if (channels.length === 1) return `${channels[0].kind_name}: ${channels[0].status}`;
+  const failing = channels.filter((c) => !c.status.startsWith("ok") && c.status !== "configured").length;
+  return failing ? `Notifications: ${failing} of ${channels.length} channels need attention` : `Notifications: ${channels.length} channels ok`;
+}

@@ -51,7 +51,13 @@ impl Pos {
     /// a struct directory. Other fields belong in `_index.yaml`.
     pub fn split_fields(self) -> &'static [&'static str] {
         match self {
-            Pos::Root => &["defaults", "network", "telegram", "machines"],
+            Pos::Root => &[
+                "defaults",
+                "network",
+                "telegram",
+                "notifications",
+                "machines",
+            ],
             Pos::Machine => &["services"],
             Pos::Service => &["checks"],
             _ => &[],
@@ -85,7 +91,13 @@ impl Pos {
     /// Model field order, used when writing new keys.
     pub fn order(self) -> &'static [&'static str] {
         match self {
-            Pos::Root => &["defaults", "network", "telegram", "machines"],
+            Pos::Root => &[
+                "defaults",
+                "network",
+                "telegram",
+                "notifications",
+                "machines",
+            ],
             Pos::Machine => &["name", "site", "description", "host_service", "services"],
             Pos::Service => &[
                 "name",

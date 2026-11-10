@@ -149,7 +149,33 @@ export interface Snapshot {
   config_writable: boolean;
   machines: MachineView[];
   incidents: IncidentView[];
-  telegram: string;
+  notifications: ChannelView[];
+}
+
+export interface ChannelView {
+  id: string;
+  kind: string;
+  kind_name: string;
+  status: string;
+}
+
+export interface NotificationField {
+  key: string;
+  kind: "text" | "url" | "bool" | "int" | "list" | "choice";
+  choices: string[] | null;
+  help: string;
+  required: boolean;
+  secret: boolean;
+  default: string | null;
+  example: string | null;
+}
+
+export interface NotificationKind {
+  kind: string;
+  name: string;
+  docs: string;
+  per_incident: boolean;
+  fields: NotificationField[];
 }
 
 export interface ConfigResponse {
@@ -159,7 +185,7 @@ export interface ConfigResponse {
   network: NetworkPolicy;
   machines: Record<string, Machine>;
   sources: Record<string, string>;
-  telegram_configured: boolean;
+  notification_channels: { id: string; kind: string; kind_name: string }[];
 }
 
 export interface IconEntry {

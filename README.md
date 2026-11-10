@@ -1,6 +1,6 @@
 # Vesper
 
-A status monitor for your homelab. You describe machines and services in YAML; Vesper probes them, records history in SQLite and can send incidents to Telegram. It ships as one container with a web UI.
+A status monitor for your homelab. You describe machines and services in YAML; Vesper probes them, records history in SQLite and can send incidents to the notification services Uptime Kuma supports, from Telegram, Discord and ntfy to email, SMS gateways and PagerDuty. It ships as one container with a web UI.
 
 ![Vesper overview: four machines with their services, Sonarr down, MinIO paused, Paperless-ngx in maintenance](.github/readme/overview-desktop.png)
 
@@ -87,14 +87,22 @@ curl -fsS https://status.example.com/api/heartbeat/nas/backups/restic \
 
 For scheduled jobs, use the ready-made producers in [examples/producers](examples/producers) with the systemd units in [examples/systemd](examples/systemd). They cover a single heartbeat, Docker container health, Proxmox node health and wrapping a job's exit code. Vesper runs no commands on other hosts, and by default it has no Docker access.
 
-Telegram is optional and takes three lines:
+Notifications are optional. Each channel names a `kind` and that kind's settings; every channel receives every incident:
 
 ```yaml
-telegram:
-  bot_token: {file: telegram-bot-token}
-  chat_id: {file: telegram-chat-id}
+notifications:
   dashboard_url: https://status.example.com
+  channels:
+    telegram:
+      kind: telegram
+      bot_token: {file: telegram-bot-token}
+      chat_id: {file: telegram-chat-id}
+    phone:
+      kind: ntfy
+      topic: {file: ntfy-topic}
 ```
+
+[docs/notifications.md](docs/notifications.md) lists the channel kinds ported from Uptime Kuma's notification providers, from chat apps and push services to email, SMS gateways and on-call tools, with each kind's settings.
 
 ### Optional: services from Docker labels
 
@@ -210,7 +218,7 @@ Vesper is single-tenant. The deployment boundary is the security model; [docs/se
 - **Turning auth off leaves the other checks on.** These are the HTTPS `VESPER_PUBLIC_URL` origin, Origin and CSRF checks on every change, and the `VESPER_TRUSTED_PROXIES` peer check. Vesper ignores forwarding and identity headers when deciding who is allowed. CSRF protection is not authentication.
 - **One route skips proxy auth:** `POST /api/heartbeat/<machine>/<service>/<check>`. It still requires that check's own bearer token, returns no inventory, and gives the same 401 for every failure.
 - **Outbound probes go only to `network.allowed_cidrs`.** TLS verification is always on; add a private CA with `network.private_ca_file`.
-- **Secret values stay out of API responses, exports, logs and notification text.** YAML holds references; Vesper resolves them for authentication, including outbound HTTP headers and Telegram requests. A check author who can use a credential can send it to an allowed HTTP target. Prefer files over environment values, which `docker inspect` shows.
+- **Secret values stay out of API responses, exports, logs and notification text.** YAML holds references; Vesper resolves them for authentication, including outbound HTTP headers and notification requests. A check author who can use a credential can send it to an allowed HTTP target. Prefer files over environment values, which `docker inspect` shows.
 - **The container runs non-root**, on a read-only root filesystem, with no published port.
 - **No Docker access by default.** Optional [label discovery](docs/discovery.md) with a mounted local socket gives the dashboard process root-equivalent control of that host's Docker, so a compromise of Vesper becomes a compromise of the host. Its UID, read-only root and dropped capabilities don't limit that. A restricted socket proxy that allows only the container list avoids the mount.
 
@@ -218,7 +226,7 @@ Vesper is single-tenant. The deployment boundary is the security model; [docs/se
 
 - **Vesper can't report its own outage.** Run an independent monitor, for example Uptime Kuma, and the [watchdog](examples/watchdog), which proves heartbeats still reach Vesper.
 - **Checks are HTTP(S), TCP and push only.** There are no ICMP, DNS or certificate-expiry checks. Docker and Proxmox health arrive as pushed heartbeats.
-- **There is one process and no high availability.** Telegram goes to a single chat. Automated tests use a mock Telegram API, so confirm real delivery with *Settings → Telegram → Send test message*.
+- **There is one process and no high availability.** Automated tests build every channel kind's requests and run delivery against a mock API, but they never call the real services, so confirm real delivery with *Settings → Notifications → Send test message*.
 - **Saves that span several YAML files are not transactional.** If a resulting configuration is invalid, Vesper keeps running the last valid one and shows the error in Settings.
 - **Back up `/data` with SQLite's `.backup`, or stop Vesper first.** Copying a live `vesper.db` can miss data that is still in the WAL file.
 - **The image is linux/amd64 only.**

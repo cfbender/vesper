@@ -1,5 +1,5 @@
 //! SQLite operational persistence: check state, samples, incidents, delivery
-//! awareness, Telegram channel state, silences and audit events.
+//! awareness, notification channel state, silences and audit events.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -86,10 +86,11 @@ pub(crate) struct DeliveryRow {
     pub last_reminder_at: Option<DateTime<Utc>>,
 }
 
-/// Durable per-recipient Telegram channel state.
+/// Durable per-recipient notification channel state. The table keeps its
+/// original `telegram_channel` name; rows are keyed by any channel's recipient.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ChannelRow {
-    /// Telegram-requested `retry_after` deadline.
+    /// Service-requested `retry_after` deadline.
     pub retry_after_until: Option<DateTime<Utc>>,
     /// Local exponential backoff after transient failures.
     pub backoff_until: Option<DateTime<Utc>>,
@@ -485,6 +486,7 @@ impl Store {
     pub fn mark_delivered(
         &self,
         recipient: &str,
+        label: &str,
         at: DateTime<Utc>,
         outage: &[i64],
         recovery: &[i64],
@@ -493,22 +495,15 @@ impl Store {
         let tx = self.conn.unchecked_transaction()?;
         let at_s = fmt_time(at);
         for (ids, column, event) in [
-            (
-                outage,
-                "outage_sent_at",
-                "Outage notification accepted by Telegram",
-            ),
+            (outage, "outage_sent_at", "Outage notification accepted by"),
             (
                 recovery,
                 "recovery_sent_at",
-                "Recovery notification accepted by Telegram",
+                "Recovery notification accepted by",
             ),
-            (
-                reminder,
-                "last_reminder_at",
-                "Reminder accepted by Telegram",
-            ),
+            (reminder, "last_reminder_at", "Reminder accepted by"),
         ] {
+            let event = format!("{event} {label}");
             for id in ids {
                 tx.execute(
                     &format!(

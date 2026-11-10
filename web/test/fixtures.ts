@@ -1,6 +1,7 @@
 // TEST-ONLY FIXTURES. Illustrative inventory for unit tests and the local
 // fixture server used to render screenshots. Never imported by src/.
 import type {
+  NotificationKind,
   Check,
   CheckView,
   ConfigResponse,
@@ -135,7 +136,10 @@ export function fixtureConfig(machines = fixtureMachines(), revision = "r-7c1f3e
     network: { allowed_cidrs: ["192.168.1.0/24", "10.0.5.0/24"], max_concurrent: 16, max_response_bytes: 1048576, private_ca_file: null },
     machines,
     sources,
-    telegram_configured: true,
+    notification_channels: [
+      { id: "telegram", kind: "telegram", kind_name: "Telegram" },
+      { id: "ops", kind: "discord", kind_name: "Discord" },
+    ],
   };
 }
 
@@ -270,6 +274,46 @@ export function fixtureSnapshot(
     config_writable: config.writable,
     machines,
     incidents,
-    telegram: "Ready · last delivery accepted",
+    notifications: [
+      { id: "telegram", kind: "telegram", kind_name: "Telegram", status: `ok; last message accepted ${iso(now - 3600_000)}` },
+      { id: "ops", kind: "discord", kind_name: "Discord", status: "configured" },
+    ],
   };
 }
+
+export const fixtureKinds: { kinds: NotificationKind[] } = {
+  kinds: [
+    {
+      kind: "telegram",
+      name: "Telegram",
+      docs: "https://core.telegram.org/bots/api#sendmessage",
+      per_incident: false,
+      fields: [
+        { key: "bot_token", kind: "text", choices: null, help: "Bot token from @BotFather.", required: true, secret: true, default: null, example: null },
+        { key: "chat_id", kind: "text", choices: null, help: "Chat, group or channel ID.", required: true, secret: true, default: null, example: null },
+        { key: "silent", kind: "bool", choices: null, help: "Deliver without sound.", required: false, secret: false, default: null, example: null },
+      ],
+    },
+    {
+      kind: "ntfy",
+      name: "ntfy",
+      docs: "https://docs.ntfy.sh/publish/#publish-as-json",
+      per_incident: false,
+      fields: [
+        { key: "server_url", kind: "url", choices: null, help: "ntfy server.", required: false, secret: false, default: "https://ntfy.sh", example: null },
+        { key: "topic", kind: "text", choices: null, help: "Topic name.", required: true, secret: false, default: null, example: "vesper-alerts" },
+        { key: "priority", kind: "choice", choices: ["1", "2", "3", "4", "5"], help: "Priority of problems.", required: false, secret: false, default: "4", example: null },
+        { key: "access_token", kind: "text", choices: null, help: "Access token.", required: false, secret: true, default: null, example: null },
+      ],
+    },
+    {
+      kind: "pagerduty",
+      name: "PagerDuty",
+      docs: "https://developer.pagerduty.com/docs/events-api-v2/trigger-events/",
+      per_incident: true,
+      fields: [
+        { key: "integration_key", kind: "text", choices: null, help: "Events API v2 integration key.", required: true, secret: true, default: null, example: null },
+      ],
+    },
+  ],
+};

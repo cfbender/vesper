@@ -49,6 +49,32 @@ impl AddressPolicy {
     }
 }
 
+/// Notification destinations: public addresses are reachable, private and
+/// shared networks only when the allowlist covers them, and the always-denied
+/// classes never. Returns the canonical address when permitted.
+pub(crate) fn permit_notification(policy: &AddressPolicy, ip: IpAddr) -> Result<IpAddr, String> {
+    let ip = ip.to_canonical();
+    if let Some(reason) = denied_class(ip) {
+        return Err(format!("{ip} ({reason})"));
+    }
+    let private = match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_private()
+                || (o[0] == 100 && (64..128).contains(&o[1]))
+                || (o[0] == 198 && (o[1] == 18 || o[1] == 19))
+        }
+        IpAddr::V6(v6) => v6.segments()[0] & 0xfe00 == 0xfc00,
+    };
+    if private {
+        policy
+            .permit(ip)
+            .map_err(|_| format!("{ip} (private address not in allowed_cidrs)"))
+    } else {
+        Ok(ip)
+    }
+}
+
 /// Address classes that are denied even when an allowlist entry covers them.
 pub(crate) fn denied_class(ip: IpAddr) -> Option<&'static str> {
     match ip.to_canonical() {
@@ -200,6 +226,28 @@ mod tests {
     fn invalid_cidrs_are_rejected() {
         assert!(AddressPolicy::new(&["10.0.0.0/33".into()]).is_err());
         assert!(AddressPolicy::new(&["lan".into()]).is_err());
+    }
+
+    #[test]
+    fn notifications_reach_public_addresses_and_only_listed_private_ones() {
+        let p = policy(&["10.203.44.0/24"]);
+        assert!(permit_notification(&p, ip("149.154.167.220")).is_ok());
+        assert!(permit_notification(&p, ip("2606:4700::6810:84e5")).is_ok());
+        assert!(permit_notification(&p, ip("10.203.44.9")).is_ok());
+        for addr in [
+            "10.1.1.1",
+            "192.168.1.5",
+            "172.16.0.1",
+            "100.64.0.1",
+            "fd00::1",
+            "::ffff:192.168.1.5",
+        ] {
+            assert!(permit_notification(&p, ip(addr)).is_err(), "{addr}");
+        }
+        let all = policy(&["0.0.0.0/0", "::/0"]);
+        for addr in ["127.0.0.1", "169.254.169.254", "::1", "fe80::1"] {
+            assert!(permit_notification(&all, ip(addr)).is_err(), "{addr}");
+        }
     }
 
     #[test]

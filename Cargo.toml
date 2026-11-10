@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/probe", "crates/engine", "crates/discover", "crates/server"]
+members = ["crates/core", "crates/notify", "crates/probe", "crates/engine", "crates/discover", "crates/server"]
 resolver = "2"
 
 [workspace.package]
@@ -17,3 +17,4 @@ vesper-core = { path = "crates/core" }
 vesper-probe = { path = "crates/probe" }
 vesper-engine = { path = "crates/engine" }
 vesper-discover = { path = "crates/discover" }
+vesper-notify = { path = "crates/notify" }

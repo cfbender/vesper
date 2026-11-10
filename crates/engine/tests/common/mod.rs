@@ -98,48 +98,69 @@ impl Prober for FakeProber {
     }
 }
 
-/// Mock Telegram HTTP transport: records requests, replies with scripted
-/// HTTP responses (default 200 ok).
+/// Mock notification transport: records HTTP requests and replies with
+/// scripted responses (default: Telegram's 200 ok).
 #[derive(Default)]
 pub struct FakeTelegram {
-    pub sent: StdMutex<Vec<TelegramRequest>>,
-    pub replies: StdMutex<VecDeque<Result<HttpResponse, String>>>,
+    pub sent: StdMutex<Vec<vesper_notify::HttpRequest>>,
+    pub replies: StdMutex<VecDeque<vesper_notify::Response>>,
 }
 impl FakeTelegram {
     pub fn reply(&self, status: u16, body: &str) {
-        self.replies.lock().unwrap().push_back(Ok(HttpResponse {
-            status,
-            body: body.as_bytes().to_vec(),
-        }));
+        self.replies
+            .lock()
+            .unwrap()
+            .push_back(vesper_notify::Response {
+                status,
+                retry_after: None,
+                body: body.as_bytes().to_vec(),
+            });
     }
+    /// The `text` of every request sent, in order.
     pub fn texts(&self) -> Vec<String> {
         self.sent
             .lock()
             .unwrap()
             .iter()
-            .map(|r| r.text.clone())
+            .map(|r| match &r.body {
+                vesper_notify::RequestBody::Json(v) => {
+                    v["text"].as_str().unwrap_or_default().to_string()
+                }
+                other => panic!("unexpected body {other:?}"),
+            })
             .collect()
     }
     pub fn count(&self) -> usize {
         self.sent.lock().unwrap().len()
     }
 }
-impl TelegramTransport for FakeTelegram {
-    fn send_message<'a>(
+impl NotifyTransport for FakeTelegram {
+    fn http<'a>(
         &'a self,
-        request: &'a TelegramRequest,
-    ) -> BoxFuture<'a, Result<HttpResponse, String>> {
+        request: &'a vesper_notify::HttpRequest,
+        _network: &'a Network,
+    ) -> BoxFuture<'a, Result<vesper_notify::Response, vesper_notify::Verdict>> {
         Box::pin(async move {
             self.sent.lock().unwrap().push(request.clone());
-            self.replies
+            Ok(self
+                .replies
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or(Ok(HttpResponse {
+                .unwrap_or(vesper_notify::Response {
                     status: 200,
+                    retry_after: None,
                     body: br#"{"ok":true,"result":{"message_id":1}}"#.to_vec(),
                 }))
         })
+    }
+
+    fn mail<'a>(
+        &'a self,
+        _request: &'a vesper_notify::MailRequest,
+        _network: &'a Network,
+    ) -> BoxFuture<'a, vesper_notify::Verdict> {
+        Box::pin(async { panic!("no mail channels in engine tests") })
     }
 }
 
@@ -264,6 +285,13 @@ impl Harness {
         self.engine.lock().await.snapshot().unwrap()
     }
 
+    /// Delivery status of the only notification channel.
+    pub async fn channel_status(&self) -> String {
+        let channels = self.snapshot().await.notifications;
+        assert_eq!(channels.len(), 1);
+        channels[0].status.clone()
+    }
+
     pub async fn service(&self, id: &str) -> ServiceView {
         self.snapshot()
             .await
@@ -299,7 +327,7 @@ fn open(
         EngineOptions {
             clock: clock.clone(),
             prober: prober.clone(),
-            telegram: telegram.clone(),
+            transport: telegram.clone(),
         },
     )
     .unwrap();

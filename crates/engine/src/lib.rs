@@ -1,15 +1,15 @@
 //! Vesper monitoring engine: scheduling, state transitions, SQLite
-//! persistence and Telegram delivery.
+//! persistence and notification delivery.
 //!
 //! The engine is held in `Arc<tokio::sync::Mutex<Engine>>`. [`run`] drives the
 //! scheduler and the notification worker; neither holds the lock during
 //! network IO. [`tick`] performs one complete scheduler and delivery pass and
 //! is what [`run`] repeats; tests use it with an injected clock, prober and
-//! Telegram transport through [`Engine::open_with`].
+//! notification transport through [`Engine::open_with`].
 
 mod notify;
 mod store;
-pub mod telegram;
+pub mod transport;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration as TimeDelta, Utc};
@@ -27,7 +27,7 @@ use vesper_core::{
     MaintenanceWindow, NetworkPolicy, ProbeResult, Sample, Service, ServiceView, Snapshot,
 };
 
-pub use telegram::{HttpResponse, HttpsTelegram, TelegramRequest, TelegramTransport};
+pub use transport::{Network, NetworkTransport, NotifyTransport};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -75,7 +75,7 @@ impl Prober for NetworkProber {
 pub struct EngineOptions {
     pub clock: Arc<dyn Clock>,
     pub prober: Arc<dyn Prober>,
-    pub telegram: Arc<dyn TelegramTransport>,
+    pub transport: Arc<dyn NotifyTransport>,
 }
 
 impl EngineOptions {
@@ -83,7 +83,7 @@ impl EngineOptions {
         Ok(Self {
             clock: Arc::new(SystemClock),
             prober: Arc::new(NetworkProber),
-            telegram: Arc::new(HttpsTelegram::new()?),
+            transport: Arc::new(NetworkTransport),
         })
     }
 }
@@ -129,7 +129,7 @@ pub struct Engine {
     started_at: DateTime<Utc>,
     clock: Arc<dyn Clock>,
     prober: Arc<dyn Prober>,
-    transport: Arc<dyn TelegramTransport>,
+    transport: Arc<dyn NotifyTransport>,
     checks: BTreeMap<String, Runtime>,
     /// Running probe per check ID with the generation it was started for.
     /// Owned here, not by the runtime, so runs survive config removal and
@@ -139,9 +139,8 @@ pub struct Engine {
     /// Open incident per service ID.
     open: BTreeMap<String, i64>,
     silences: BTreeMap<String, DateTime<Utc>>,
-    /// Recipient key of the configured chat, from the last credential check.
-    recipient: Option<String>,
-    credential_error: Option<String>,
+    /// Per channel ID, from the last resolution of its settings.
+    channel_state: BTreeMap<String, notify::ChannelState>,
     last_alive_written: DateTime<Utc>,
     wake: Arc<Notify>,
 }
@@ -197,7 +196,7 @@ pub(crate) fn bounded(text: &str, max: usize) -> String {
 }
 
 /// `t + n` seconds, saturating at the end of year 9999 so huge configured or
-/// Telegram-requested durations are honored without overflow.
+/// service-requested durations are honored without overflow.
 pub(crate) fn after(t: DateTime<Utc>, n: u64) -> DateTime<Utc> {
     let max = DateTime::<Utc>::from_naive_utc_and_offset(
         chrono::NaiveDate::from_ymd_opt(9999, 12, 31)
@@ -348,19 +347,18 @@ impl Engine {
             started_at: now,
             clock: options.clock,
             prober: options.prober,
-            transport: options.telegram,
+            transport: options.transport,
             checks: BTreeMap::new(),
             in_flight: BTreeMap::new(),
             next_generation: 1,
             open,
             silences,
-            recipient: None,
-            credential_error: None,
+            channel_state: BTreeMap::new(),
             last_alive_written: now,
             wake: Arc::new(Notify::new()),
         };
         engine.sync_checks(now, stored)?;
-        engine.credentials(); // recipient key for persisted delivery awareness
+        engine.resolve_channels(); // recipient keys for persisted delivery awareness
         let since = last_alive
             .as_deref()
             .and_then(store::parse_time)
@@ -392,7 +390,7 @@ impl Engine {
         let now = self.clock.now();
         self.loaded = loaded;
         self.sync_checks(now, BTreeMap::new())?;
-        self.credentials();
+        self.resolve_channels();
         self.evaluate_all(now)?;
         self.wake.notify_one();
         Ok(())
@@ -1147,7 +1145,7 @@ impl Engine {
             config_writable: self.loaded.writable,
             machines,
             incidents,
-            telegram: self.telegram_status(now)?,
+            notifications: self.channel_views(now)?,
         })
     }
 }
@@ -1196,7 +1194,7 @@ fn claim(engine: &mut Engine) -> Vec<Job> {
 }
 
 /// One full pass: push deadlines, run every due check to completion (bounded
-/// and without overlap), then one Telegram delivery attempt.
+/// and without overlap), then one delivery attempt per notification channel.
 pub async fn tick(engine: &Arc<Mutex<Engine>>) {
     let jobs = claim(&mut *engine.lock().await);
     let mut set = tokio::task::JoinSet::new();
@@ -1221,7 +1219,8 @@ pub async fn run(engine: Arc<Mutex<Engine>>) {
     tokio::spawn(async move {
         loop {
             let attempted = notify::deliver_once(&worker).await;
-            // At most one message per second keeps within Telegram chat limits.
+            // At most one message per second and channel keeps within chat
+            // service rate limits.
             let pause = tokio::time::sleep(Duration::from_secs(1));
             if attempted {
                 pause.await;
@@ -1242,9 +1241,9 @@ pub async fn run(engine: Arc<Mutex<Engine>>) {
     }
 }
 
-/// Sends an explicit, user-requested Telegram test message.
-pub async fn test_telegram(engine: Arc<Mutex<Engine>>) -> Result<String> {
-    notify::test_telegram(&engine).await
+/// Sends an explicit, user-requested test message on one channel.
+pub async fn test_channel(engine: Arc<Mutex<Engine>>, channel_id: &str) -> Result<String> {
+    notify::test_channel(&engine, channel_id).await
 }
 
 #[cfg(test)]

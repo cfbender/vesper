@@ -19,6 +19,7 @@ const FORBIDDEN_HEADERS: &[&str] = &[
 ];
 const MAX_DESCRIPTION: usize = 4000;
 const MAX_INTERVAL: u64 = 7 * 24 * 3600;
+const MAX_CHANNELS: usize = 32;
 
 pub fn validate(config: &Config) -> Result<()> {
     let mut errors = Vec::new();
@@ -27,16 +28,36 @@ pub fn validate(config: &Config) -> Result<()> {
     if let Some(t) = &config.telegram {
         secret("telegram.bot_token", &t.bot_token, &mut errors);
         secret("telegram.chat_id", &t.chat_id, &mut errors);
-        match url::Url::parse(&t.dashboard_url) {
-            Ok(u) if matches!(u.scheme(), "http" | "https") && u.host_str().is_some() => {
-                if !u.username().is_empty() || u.password().is_some() {
-                    errors.push("telegram.dashboard_url: must not contain credentials".into());
-                }
-            }
-            _ => errors.push("telegram.dashboard_url: must be an absolute http(s) URL".into()),
+        dashboard_url(
+            "telegram",
+            &t.dashboard_url,
+            t.reminder_seconds,
+            &mut errors,
+        );
+        if config.notifications.is_some() {
+            errors.push(
+                "telegram: move this block into notifications.channels (kind: telegram); both cannot be set"
+                    .into(),
+            );
         }
-        if t.reminder_seconds.is_some_and(|s| s < 60) {
-            errors.push("telegram.reminder_seconds: must be at least 60".into());
+    }
+    if let Some(n) = &config.notifications {
+        dashboard_url(
+            "notifications",
+            &n.dashboard_url,
+            n.reminder_seconds,
+            &mut errors,
+        );
+        no_case_collisions("notifications.channels", n.channels.keys(), &mut errors);
+        if n.channels.len() > MAX_CHANNELS {
+            errors.push(format!(
+                "notifications.channels: at most {MAX_CHANNELS} channels"
+            ));
+        }
+        for (cid, channel) in &n.channels {
+            let cp = format!("notifications.channels.{}", safe_key(cid));
+            id(&cp, cid, &mut errors);
+            crate::channels::validate(&cp, channel, &mut errors);
         }
     }
     no_case_collisions("machines", config.machines.keys(), &mut errors);
@@ -198,6 +219,24 @@ fn no_case_collisions<'a>(
                 shown(k)
             ));
         }
+    }
+}
+
+fn dashboard_url(path: &str, url: &str, reminder: Option<u64>, errors: &mut Vec<String>) {
+    match url::Url::parse(url) {
+        Ok(u) if matches!(u.scheme(), "http" | "https") && u.host_str().is_some() => {
+            if !u.username().is_empty() || u.password().is_some() {
+                errors.push(format!(
+                    "{path}.dashboard_url: must not contain credentials"
+                ));
+            }
+        }
+        _ => errors.push(format!(
+            "{path}.dashboard_url: must be an absolute http(s) URL"
+        )),
+    }
+    if reminder.is_some_and(|s| s < 60) {
+        errors.push(format!("{path}.reminder_seconds: must be at least 60"));
     }
 }
 

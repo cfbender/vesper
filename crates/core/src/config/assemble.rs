@@ -147,7 +147,7 @@ impl Assembled {
     }
 
     /// Logical path to defining file for machines, services, checks and the
-    /// top-level `defaults`, `network` and `telegram` sections.
+    /// top-level `defaults`, `network`, `telegram` and `notifications` sections.
     pub fn sources(&self) -> BTreeMap<String, String> {
         let mut out = BTreeMap::new();
         self.collect_sources(self.root(), Pos::Root, "", &mut out);
@@ -165,7 +165,8 @@ impl Assembled {
             let child_pos = pos.child(key);
             let path = join(logical, key);
             let record = matches!(child_pos, Pos::Machine | Pos::Service | Pos::Check)
-                || (pos == Pos::Root && matches!(key, "defaults" | "network" | "telegram"));
+                || (pos == Pos::Root
+                    && matches!(key, "defaults" | "network" | "telegram" | "notifications"));
             if record {
                 out.insert(path.clone(), Self::source_of(child));
             }

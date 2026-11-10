@@ -498,7 +498,7 @@ export function EditorPage({
           <Toggle
             checked={draft.service.notifications}
             onChange={(notifications) => setService({ notifications })}
-            label="Send Telegram notifications for this service"
+            label="Send notifications for this service"
             hint="Incidents are still recorded when notifications are off."
           />
           <fieldset className="subgroup">

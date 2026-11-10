@@ -1114,3 +1114,17 @@ td:first-child {
     border: 1px solid CanvasText;
   }
 }
+
+/* Notification channels */
+.channel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.channel-head .btn {
+  margin-left: auto;
+}
+.channel .evidence {
+  margin: 6px 0 0;
+}

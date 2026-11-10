@@ -35,7 +35,7 @@ pub struct LoadedConfig {
     pub revision: String,
     /// Logical path (`machines/jelly/services/media`) to the root-relative
     /// YAML file that defines it. Machines, services, checks and the
-    /// `defaults`, `network` and `telegram` sections are listed. A path
+    /// `defaults`, `network`, `telegram` and `notifications` sections are listed. A path
     /// ending in `/` is a directory without an `_index.yaml`.
     pub sources: BTreeMap<String, String>,
     /// Whether Vesper may write to the configuration root.

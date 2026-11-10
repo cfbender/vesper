@@ -4,7 +4,7 @@ import { short } from "../components/Layout";
 import { Notice, PageTitle, ToneTag, useAction } from "../components/ui";
 import { useLive } from "../data";
 import { bytes, duration, fullTime } from "../format";
-import type { ConfigResponse } from "../types";
+import type { ChannelView, ConfigResponse, NotificationField, NotificationKind } from "../types";
 
 export function useConfig() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
@@ -30,16 +30,157 @@ export function useConfig() {
   return { config, error, load };
 }
 
-const TELEGRAM_EXAMPLE = `telegram:
-  bot_token: { env: VESPER_TELEGRAM_TOKEN }
-  chat_id: { file: telegram-chat-id }
-  dashboard_url: https://vesper.example.lan`;
+/** Example YAML for one channel kind: required settings, then optional ones commented out. */
+export function channelExample(kind: NotificationKind): string {
+  const value = (f: NotificationField) => {
+    if (f.secret) return `{ file: ${kind.kind.replace(/_/g, "-")}-${f.key.replace(/_/g, "-")} }`;
+    const v = f.example ?? f.default ?? (f.kind === "bool" ? "false" : f.kind === "choice" ? f.choices?.[0] : "…");
+    return f.kind === "list" ? `[${v}]` : String(v);
+  };
+  const lines = [
+    "notifications:",
+    "  dashboard_url: https://vesper.example.lan",
+    "  channels:",
+    `    ${kind.kind.replace(/_/g, "-")}:`,
+    `      kind: ${kind.kind}`,
+    ...kind.fields.filter((f) => f.required).map((f) => `      ${f.key}: ${value(f)}`),
+    ...kind.fields.filter((f) => !f.required).map((f) => `      # ${f.key}: ${value(f)}`),
+  ];
+  return lines.join("\n");
+}
+
+function ChannelRow({ channel }: { channel: ChannelView }) {
+  const test = useAction<{ message: string }>();
+  const ok = channel.status.startsWith("ok") || channel.status === "configured";
+  const bad = channel.status.startsWith("error");
+  return (
+    <li className="channel">
+      <div className="channel-head">
+        <strong>{channel.id}</strong> <span className="note">{channel.kind_name}</span>{" "}
+        <ToneTag tone={bad ? "bad" : ok ? "good" : "warn"}>{bad ? "Error" : ok ? "Ready" : "Delayed"}</ToneTag>
+        <button
+          className="btn"
+          disabled={test.busy}
+          aria-label={`Send test message to ${channel.id}`}
+          onClick={() => test.run(() => api.testChannel(channel.id))}
+        >
+          {test.busy ? "Sending…" : "Send test message"}
+        </button>
+      </div>
+      <p className="evidence">{channel.status}</p>
+      <div aria-live="polite">
+        {test.result && (
+          <Notice tone="good" title="Test message accepted">
+            <p className="evidence">{test.result.message}</p>
+            <p className="note">Acceptance by the service is not a read receipt; check that it arrived.</p>
+          </Notice>
+        )}
+        {test.error && (
+          <Notice tone="bad" title="Test message failed">
+            <p className="evidence">{test.error}</p>
+          </Notice>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function KindReference() {
+  const [kinds, setKinds] = useState<NotificationKind[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState("telegram");
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (open && !kinds)
+      api.notificationKinds().then(
+        (r) => setKinds(r.kinds),
+        (e) => setError(errorText(e)),
+      );
+  }, [open, kinds]);
+  const kind = kinds?.find((k) => k.kind === selected) ?? kinds?.[0];
+  return (
+    <details className="samples" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary>Channel kinds{kinds ? ` (${kinds.length})` : ""}</summary>
+      {error && <Notice tone="bad" title="Could not load channel kinds">{error}</Notice>}
+      {kinds && kind && (
+        <>
+          <div className="field">
+            <label htmlFor="kind-select">Kind</label>
+            <select id="kind-select" value={kind.kind} onChange={(e) => setSelected(e.target.value)}>
+              {[...kinds]
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((k) => (
+                  <option key={k.kind} value={k.kind}>
+                    {k.name.toLowerCase() === k.kind ? k.name : `${k.name} (${k.kind})`}
+                  </option>
+                ))}
+            </select>
+          </div>
+          <p className="note">
+            <a href={kind.docs} target="_blank" rel="noreferrer">
+              {kind.name} API documentation
+            </a>
+            {kind.per_incident && " · Sends one alert per incident and resolves it on recovery."}
+          </p>
+          <pre className="block">{channelExample(kind)}</pre>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Setting</th>
+                  <th>Value</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {kind.fields.map((f) => (
+                  <tr key={f.key}>
+                    <td>
+                      <code>{f.key}</code>
+                    </td>
+                    <td>
+                      {f.secret ? "secret reference" : f.kind === "choice" ? f.choices?.join(" · ") : f.kind}
+                      {f.required ? ", required" : f.default ? `, default ${f.default}` : ", optional"}
+                    </td>
+                    <td>{f.help}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </details>
+  );
+}
+
+function NotificationsCard({ channels }: { channels: ChannelView[] | null }) {
+  return (
+    <section className="card" aria-labelledby="notify-title">
+      <h2 id="notify-title">Notifications</h2>
+      {channels && channels.length > 0 ? (
+        <ul className="plain-list channels">
+          {channels.map((c) => (
+            <ChannelRow key={c.id} channel={c} />
+          ))}
+        </ul>
+      ) : (
+        <p className="note">
+          {channels ? "No notification channels are configured. " : ""}Add channels under{" "}
+          <code>notifications.channels</code> in your YAML. Every channel receives every incident
+          notification. Credentials are secret references to environment variables or files in the
+          secrets directory, never literal values.
+        </p>
+      )}
+      <KindReference />
+    </section>
+  );
+}
 
 export function SettingsPage() {
   const { snapshot, refresh } = useLive();
   const { config, error, load } = useConfig();
   const reload = useAction<Record<string, unknown>>();
-  const telegram = useAction<{ message: string }>();
   const sources = config ? [...new Set(Object.values(config.sources))].sort() : [];
   const reloadMessage =
     reload.result && typeof reload.result.message === "string" ? reload.result.message : null;
@@ -125,60 +266,7 @@ export function SettingsPage() {
         )}
       </section>
 
-      <section className="card" aria-labelledby="tg-title">
-        <h2 id="tg-title">Telegram</h2>
-        <dl className="factgrid">
-          <div>
-            <dt>Configured</dt>
-            <dd>
-              {config ? (
-                config.telegram_configured ? (
-                  <ToneTag tone="good">Yes</ToneTag>
-                ) : (
-                  <ToneTag tone="warn">Not configured</ToneTag>
-                )
-              ) : (
-                "—"
-              )}
-            </dd>
-          </div>
-          <div>
-            <dt>Delivery status</dt>
-            <dd className="evidence">{snapshot?.telegram || "Unknown"}</dd>
-          </div>
-        </dl>
-        {config && !config.telegram_configured && (
-          <>
-            <p className="note">
-              Add a <code>telegram</code> block to your YAML. Credentials are secret references to
-              environment variables or files in the secrets directory, never literal values.
-            </p>
-            <pre className="block">{TELEGRAM_EXAMPLE}</pre>
-          </>
-        )}
-        <div className="actions">
-          <button
-            className="btn primary"
-            disabled={telegram.busy || !config?.telegram_configured}
-            onClick={() => telegram.run(() => api.testTelegram())}
-          >
-            {telegram.busy ? "Sending…" : "Send test message"}
-          </button>
-        </div>
-        <div aria-live="polite">
-          {telegram.result && (
-            <Notice tone="good" title="Telegram accepted the test message">
-              <p className="evidence">{telegram.result.message}</p>
-              <p className="note">Acceptance by Telegram is not a read receipt; check the chat.</p>
-            </Notice>
-          )}
-          {telegram.error && (
-            <Notice tone="bad" title="Test message failed">
-              <p className="evidence">{telegram.error}</p>
-            </Notice>
-          )}
-        </div>
-      </section>
+      <NotificationsCard channels={snapshot?.notifications ?? null} />
 
       {config && (
         <section className="card" aria-labelledby="policy-title">

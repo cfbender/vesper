@@ -435,9 +435,8 @@ async fn retry_after_is_durable_and_the_retry_sends_current_state() {
     steps(&h, "jelly/a/x", "FF").await; // t60: Alpha down, attempt rate limited
     assert_eq!(h.telegram.count(), 1);
     assert!(h
-        .snapshot()
+        .channel_status()
         .await
-        .telegram
         .starts_with("rate limited by Telegram"));
 
     h.prober.set("jelly/b/y", false);
@@ -462,7 +461,7 @@ async fn retry_after_is_durable_and_the_retry_sends_current_state() {
         h.incidents("jelly/b").await[0].notification_state,
         "history only: the outage was never delivered"
     );
-    assert!(h.snapshot().await.telegram.starts_with("ok;"));
+    assert!(h.channel_status().await.starts_with("ok;"));
 }
 
 #[tokio::test]
@@ -474,7 +473,7 @@ async fn telegram_rejection_is_exposed_and_stops_until_test_or_config_change() {
     h.tick().await;
     steps(&h, WEB, "FF").await;
     assert_eq!(h.telegram.count(), 1);
-    let status = h.snapshot().await.telegram;
+    let status = h.channel_status().await;
     assert!(
         status.starts_with("error: Telegram API 401: Unauthorized"),
         "{status}"
@@ -484,7 +483,7 @@ async fn telegram_rejection_is_exposed_and_stops_until_test_or_config_change() {
     }
     assert_eq!(h.telegram.count(), 1, "rejections are not retried blindly");
 
-    let message = vesper_engine::test_telegram(h.engine.clone())
+    let message = vesper_engine::test_channel(h.engine.clone(), "telegram")
         .await
         .unwrap();
     assert!(message.contains("not a read receipt"));
@@ -500,7 +499,7 @@ async fn telegram_rejection_is_exposed_and_stops_until_test_or_config_change() {
     assert_eq!(h.telegram.count(), 4);
     steps(&h, WEB, "PPPP").await;
     assert_eq!(h.telegram.count(), 4);
-    assert!(h.snapshot().await.telegram.contains("bot was blocked"));
+    assert!(h.channel_status().await.contains("bot was blocked"));
     h.engine
         .lock()
         .await
@@ -514,7 +513,7 @@ async fn telegram_rejection_is_exposed_and_stops_until_test_or_config_change() {
         429,
         r#"{"ok":false,"error_code":429,"parameters":{"retry_after":5}}"#,
     );
-    let err = vesper_engine::test_telegram(h.engine.clone())
+    let err = vesper_engine::test_channel(h.engine.clone(), "telegram")
         .await
         .unwrap_err();
     assert!(err.to_string().contains("retry after 5 seconds"));

@@ -16,7 +16,7 @@ Splitting is allowed only at these points:
 
 | Directory | `_index.yaml` holds | Files and directories allowed |
 | --- | --- | --- |
-| root | any top-level field | `defaults.yaml`, `network.yaml`, `telegram.yaml`, `machines.yaml` or `machines/` |
+| root | any top-level field | `defaults.yaml`, `network.yaml`, `telegram.yaml`, `notifications.yaml`, `machines.yaml` or `machines/` |
 | `machines/` | machines inline by ID | `<machine>.yaml` or `<machine>/` |
 | `machines/<m>/` | machine fields | `services.yaml` or `services/` |
 | `services/` | services inline by ID | `<service>.yaml` or `<service>/` |
@@ -73,7 +73,7 @@ Validation covers:
   - Fields that belong to another kind are rejected.
 - `depends_on` must name an existing `machine/service`. A service cannot depend on itself, list the same dependency twice, or form a cycle. `host_service` must be on the same machine.
 - Maintenance windows use RFC3339 timestamps with the end after the start. A weekly window can be at most 7 days.
-- Network CIDRs and limits, the Telegram URL, and the icon ID format.
+- Network CIDRs and limits, the dashboard URL, the icon ID format, and notification channels: a known `kind`, only that kind's settings, required settings present, secret references for credentials ([notifications](../../docs/notifications.md)).
 
 ## Saving
 

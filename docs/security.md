@@ -4,9 +4,9 @@ Vesper is a single-tenant homelab monitor. It has no accounts of its own. Its sa
 
 ## Trust boundaries
 
-Browsers connect over HTTPS to a reverse proxy, optionally with authentication. Only the proxy can reach Vesper's management interface over a private connection. Push producers use one narrowly scoped bearer-token route. Vesper connects outbound to allowed LAN destinations and Telegram.
+Browsers connect over HTTPS to a reverse proxy, optionally with authentication. Only the proxy can reach Vesper's management interface over a private connection. Push producers use one narrowly scoped bearer-token route. Vesper connects outbound to allowed LAN destinations and the configured notification services.
 
-- **Authentication is optional, but strongly recommended.** Vesper has no users, passwords, OIDC or sessions. Without external authentication, anyone who can reach the dashboard or management API has full administrator access: they can edit monitoring YAML (when writable), silence, acknowledge, upload icons and send Telegram tests. Network reachability is then the only access boundary. Limit it to trusted administrators with a firewall or private VPN; unauthenticated public exposure gives the internet those same privileges. Authelia is a suggested SSO/MFA option, with an [optional access-control example](../deploy/authelia-access-control.yml); proxy-native HTTPS BasicAuth is another option. Vesper warns at startup and in Settings but does not detect or require proxy authentication.
+- **Authentication is optional, but strongly recommended.** Vesper has no users, passwords, OIDC or sessions. Without external authentication, anyone who can reach the dashboard or management API has full administrator access: they can edit monitoring YAML (when writable), silence, acknowledge, upload icons and send notification tests. Network reachability is then the only access boundary. Limit it to trusted administrators with a firewall or private VPN; unauthenticated public exposure gives the internet those same privileges. Authelia is a suggested SSO/MFA option, with an [optional access-control example](../deploy/authelia-access-control.yml); proxy-native HTTPS BasicAuth is another option. Vesper warns at startup and in Settings but does not detect or require proxy authentication.
 - **Trusted peers.** Vesper serves the dashboard and API only to TCP peers inside `VESPER_TRUSTED_PROXIES`. Peers anywhere else get 403. The reference deployment trusts only the internal `vesper-ingress` network, which Traefik alone joins. Anyone who can attach a container to that network can act as an administrator. That is already a Docker administrator, who is root-equivalent on the host. `VESPER_DEV_MODE=true` relaxes this check for local development only. Never set it in a deployment.
 - **No published port.** The reference container publishes nothing on the host. Keep the backend reachable only by the reverse proxy, never directly by clients or the internet. Disabling authentication does not disable this peer boundary, HTTPS, Origin/CSRF checks or heartbeat tokens.
 - **`/healthz`** answers any direct peer with liveness only: no inventory, no versions, no credentials. At the external proxy it follows the same optional authentication policy as other non-heartbeat routes.
@@ -73,7 +73,7 @@ Push producers ([examples/producers](../examples/producers)) send the token only
 
 - YAML holds only references, `{file: name}` (from `VESPER_SECRETS_DIR`, `/run/secrets`) or `{env: NAME}`. Literal values are rejected wherever a secret is expected.
 - Secret files are confined to the secrets directory: one path segment, symlinks only within the root, regular UTF-8 files of at most 64 KiB. Mount that directory read-only, owned by root with group 10001 and mode 0440 or 0750.
-- Resolved values never appear in API responses, `vesper export`, error messages, logs or Telegram messages. Configuration exports keep the references.
+- Resolved values never appear in API responses, `vesper export`, error messages, logs or notification messages. Configuration exports keep the references.
 - Environment values are visible through `docker inspect`. Prefer files for credentials.
 - Push tokens are per check. Generate them with `openssl rand -hex 32` and rotate them by replacing both copies.
 
@@ -113,7 +113,7 @@ Active checks are a server-side request feature, so they are constrained:
 
 - Anyone admitted by the reverse proxy is a full administrator, whether authenticated or not. Vesper has no user identity of its own. Its audit log records actions without an authenticated username; use your proxy/authentication logs for investigation rather than treating identity headers as Vesper-verified attribution.
 - An attacker who holds a check's push token can mark that one check healthy or unhealthy. Rotate the token if it is exposed.
-- Monitoring from one vantage point cannot tell a target outage from a path outage. Telegram API acceptance is not delivery proof.
+- Monitoring from one vantage point cannot tell a target outage from a path outage. A notification service accepting a message is not delivery proof.
 - Vesper cannot detect its own outage. Run the independent watchdog.
 
 ## Reporting a vulnerability

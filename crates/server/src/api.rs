@@ -79,7 +79,8 @@ pub fn router(app: App) -> Router {
         .route("/api/services/{machine}/{service}/silence", post(silence))
         .route("/api/incidents/{id}/acknowledge", post(acknowledge))
         .route("/api/draft/test", post(test_draft))
-        .route("/api/telegram/test", post(telegram_test))
+        .route("/api/notifications/kinds", get(notification_kinds))
+        .route("/api/notifications/{channel}/test", post(notification_test))
         .route(
             "/api/heartbeat/{machine}/{service}/{check}",
             post(heartbeat),
@@ -114,7 +115,7 @@ async fn snapshot(State(app): State<App>) -> ApiResult<Json<Snapshot>> {
 async fn configuration(State(app): State<App>) -> Json<Value> {
     let loaded = app.loaded.lock().await;
     Json(
-        json!({"revision":loaded.revision,"writable":loaded.writable,"defaults":loaded.config.defaults,"machines":loaded.config.machines,"sources":loaded.sources,"telegram_configured":loaded.config.telegram.is_some(),"network":loaded.config.network}),
+        json!({"revision":loaded.revision,"writable":loaded.writable,"defaults":loaded.config.defaults,"machines":loaded.config.machines,"sources":loaded.sources,"notification_channels":notification_channels(&loaded.config),"network":loaded.config.network}),
     )
 }
 
@@ -312,6 +313,7 @@ async fn test_draft(State(app): State<App>, Input(body): Input<Draft>) -> ApiRes
             },
         )]),
         telegram: None,
+        notifications: None,
     };
     config::validate(&draft)?;
     let mut results = BTreeMap::new();
@@ -323,9 +325,66 @@ async fn test_draft(State(app): State<App>, Input(body): Input<Draft>) -> ApiRes
     Ok(Json(json!({"results":results})))
 }
 
-async fn telegram_test(State(app): State<App>) -> ApiResult<Json<Value>> {
-    let message = vesper_engine::test_telegram(app.engine.clone()).await?;
-    app.engine.lock().await.audit("telegram.test", "telegram")?;
+/// Configured channels by ID and kind; settings stay out of the response.
+fn notification_channels(config: &Config) -> Vec<Value> {
+    config
+        .effective_notifications()
+        .map(|n| {
+            n.channels
+                .iter()
+                .map(|(id, c)| {
+                    let name = vesper_notify::provider(&c.kind).map_or(c.kind.as_str(), |p| p.name);
+                    json!({"id": id, "kind": c.kind, "kind_name": name})
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The channel kind catalog: settings and their documentation.
+async fn notification_kinds() -> Json<Value> {
+    let kinds: Vec<Value> = vesper_notify::providers()
+        .iter()
+        .map(|p| {
+            let fields: Vec<Value> = p
+                .fields
+                .iter()
+                .map(|f| {
+                    let (kind, choices) = match f.kind {
+                        vesper_notify::FieldKind::Text => ("text", None),
+                        vesper_notify::FieldKind::Url => ("url", None),
+                        vesper_notify::FieldKind::Bool => ("bool", None),
+                        vesper_notify::FieldKind::Int => ("int", None),
+                        vesper_notify::FieldKind::List => ("list", None),
+                        vesper_notify::FieldKind::Choice(c) => ("choice", Some(c)),
+                    };
+                    json!({"key": f.key, "kind": kind, "choices": choices, "help": f.help,
+                        "required": f.required, "secret": f.secret, "default": f.default,
+                        "example": f.example})
+                })
+                .collect();
+            json!({"kind": p.kind, "name": p.name, "docs": p.docs,
+                "per_incident": p.per_incident, "fields": fields})
+        })
+        .collect();
+    Json(json!({"kinds": kinds}))
+}
+
+async fn notification_test(
+    State(app): State<App>,
+    Path(channel): Path<String>,
+) -> ApiResult<Json<Value>> {
+    if !config::is_valid_id(&channel) {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            "Unknown notification channel".into(),
+        ));
+    }
+    let message = vesper_engine::test_channel(app.engine.clone(), &channel).await?;
+    app.engine
+        .lock()
+        .await
+        .audit("notification.test", &channel)?;
     Ok(Json(json!({"message":message})))
 }
 

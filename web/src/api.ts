@@ -3,6 +3,7 @@ import type {
   ConfigResponse,
   IconEntry,
   Machine,
+  NotificationKind,
   ProbeResult,
   SaveResponse,
   Service,
@@ -117,7 +118,9 @@ export const api = {
     mutate<unknown>("POST", `/api/services/${seg(machine)}/${seg(service)}/silence`, { until }),
   acknowledge: (incident: number, acknowledged: boolean) =>
     mutate<unknown>("POST", `/api/incidents/${incident}/acknowledge`, { acknowledged }),
-  testTelegram: () => mutate<{ message: string }>("POST", "/api/telegram/test"),
+  testChannel: (channel: string) =>
+    mutate<{ message: string }>("POST", `/api/notifications/${seg(channel)}/test`),
+  notificationKinds: () => request<{ kinds: NotificationKind[] }>("GET", "/api/notifications/kinds"),
   uploadIcon: (file: File) => {
     const form = new FormData();
     form.append("file", file);

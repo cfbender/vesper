@@ -226,6 +226,15 @@ fn dedup(addresses: &mut Vec<IpAddr>) {
 /// Resolves a configured secret reference. The value must never reach a
 /// message; the error is core's outermost description, which names the
 /// reference but never its content.
+/// Checks one resolved address of a notification destination under
+/// `allowed_cidrs`: public addresses are permitted, private networks only
+/// when listed, and loopback, link-local and metadata addresses never. Returns
+/// the canonical address, or the reason it is denied.
+pub fn permit_notification_address(ip: IpAddr, allowed_cidrs: &[String]) -> Result<IpAddr, String> {
+    let policy = AddressPolicy::new(allowed_cidrs).map_err(|Failure(m)| m)?;
+    policy::permit_notification(&policy, ip)
+}
+
 pub(crate) fn resolve_secret(secret: &SecretRef, secrets_root: &Path) -> Result<String, String> {
     vesper_core::secrets::resolve(secret, secrets_root).map_err(|error| error.to_string())
 }

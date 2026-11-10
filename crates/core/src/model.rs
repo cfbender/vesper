@@ -6,8 +6,36 @@ use std::collections::BTreeMap;
 pub struct Config {
     pub defaults: CheckDefaults,
     pub network: NetworkPolicy,
+    /// Legacy single-chat Telegram block; `notifications` supersedes it.
     pub telegram: Option<TelegramConfig>,
+    pub notifications: Option<Notifications>,
     pub machines: BTreeMap<String, Machine>,
+}
+
+impl Config {
+    /// The notification section in effect: `notifications`, or one Telegram
+    /// channel with ID `telegram` built from the legacy `telegram` block.
+    pub fn effective_notifications(&self) -> Option<std::borrow::Cow<'_, Notifications>> {
+        if let Some(n) = &self.notifications {
+            return Some(std::borrow::Cow::Borrowed(n));
+        }
+        let t = self.telegram.as_ref()?;
+        let secret = |s: &SecretRef| serde_json::to_value(s).expect("secret reference serializes");
+        Some(std::borrow::Cow::Owned(Notifications {
+            dashboard_url: t.dashboard_url.clone(),
+            reminder_seconds: t.reminder_seconds,
+            channels: BTreeMap::from([(
+                "telegram".to_string(),
+                ChannelConfig {
+                    kind: "telegram".into(),
+                    settings: BTreeMap::from([
+                        ("bot_token".to_string(), secret(&t.bot_token)),
+                        ("chat_id".to_string(), secret(&t.chat_id)),
+                    ]),
+                },
+            )]),
+        }))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -187,6 +215,28 @@ pub struct TelegramConfig {
     pub reminder_seconds: Option<u64>,
 }
 
+/// Where incident notifications go.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Notifications {
+    /// Vesper's external URL, for links in messages.
+    pub dashboard_url: String,
+    /// Repeat unacknowledged open incidents this often; off when unset.
+    pub reminder_seconds: Option<u64>,
+    /// Channels by ID. Every channel receives every notification.
+    pub channels: BTreeMap<String, ChannelConfig>,
+}
+
+/// One channel: a `kind` from the provider catalog and that kind's settings.
+/// Each setting is a literal or a secret reference; credentials must be
+/// secret references. Validation checks settings against the catalog.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ChannelConfig {
+    pub kind: String,
+    #[serde(flatten)]
+    pub settings: BTreeMap<String, serde_json::Value>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Health {
@@ -282,5 +332,15 @@ pub struct Snapshot {
     pub config_writable: bool,
     pub machines: Vec<MachineView>,
     pub incidents: Vec<IncidentView>,
-    pub telegram: String,
+    pub notifications: Vec<ChannelView>,
+}
+
+/// A configured notification channel and its delivery status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelView {
+    pub id: String,
+    pub kind: String,
+    /// Product name of the kind, such as `Discord`.
+    pub kind_name: String,
+    pub status: String,
 }
