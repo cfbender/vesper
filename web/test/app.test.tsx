@@ -118,12 +118,23 @@ describe("overview", () => {
     ]);
   });
 
-  it("shows open incidents above the inventory", async () => {
+  it("shows every machine and service without overview headings, incident rows or a site filter", async () => {
     renderAt("/");
-    const incidents = await screen.findByRole("heading", { name: "Incidents" });
-    const inventory = screen.getByRole("heading", { name: "Machines & services" });
-    expect(incidents.compareDocumentPosition(inventory) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByRole("link", { name: /Jellyfin.*correlated with jelly\/host/ })).toBeInTheDocument();
+    expect(await screen.findAllByRole("heading", { level: 3 })).toHaveLength(3);
+    const main = within(screen.getByRole("main"));
+    expect(main.queryByRole("heading", { name: "Your homelab" })).not.toBeInTheDocument();
+    expect(main.queryByRole("heading", { name: "Machines & services" })).not.toBeInTheDocument();
+    expect(main.queryByRole("heading", { name: "Incidents" })).not.toBeInTheDocument();
+    expect(main.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(main.queryByRole("link", { name: /correlated with/ })).not.toBeInTheDocument();
+    for (const machine of snapshot.machines) {
+      for (const service of machine.services) {
+        expect(main.getByRole("link", { name: new RegExp(`^${service.name},`) })).toHaveAttribute(
+          "href", `/services/${service.id}`,
+        );
+      }
+    }
+    expect(screen.getByRole("link", { name: /^Incidents/ })).toHaveAttribute("href", "/incidents");
   });
 
   it("turns a lost snapshot connection into stale last-known state, never Down", async () => {
@@ -139,14 +150,13 @@ describe("overview", () => {
     const stale = screen.getByRole("link", { name: /^Jellyfin, Down \(last known\), on Jelly$/ });
     expect(stale).toHaveClass("stale");
     expect(document.querySelectorAll(".service-tile.bad")).toHaveLength(0);
-    for (const tag of screen.getAllByText("Open (last known)")) expect(tag.closest(".tag")).toHaveClass("stale");
     // Healthy services are not promoted to a failure either.
     expect(screen.getByRole("link", { name: /^Grafana, Healthy \(last known\)/ })).toHaveClass("stale");
 
     const incident = snapshot.incidents.find((i) => i.service_id === "jelly/jellyfin")!;
     await act(() => navigate(`/incidents/${incident.id}`));
     expect(await screen.findByRole("heading", { level: 1, name: "Jellyfin incident is open" })).toBeInTheDocument();
-    expect(screen.getByText("Open (last known)")).toBeInTheDocument();
+    expect(screen.getByText("Open (last known)").closest(".tag")).toHaveClass("stale");
     expect(screen.queryByText(/is having an outage/)).not.toBeInTheDocument();
   });
 });

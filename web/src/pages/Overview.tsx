@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { HealthBadge, PageTitle, ServiceIcon, StatusDot, ToneTag } from "../components/ui";
+import { HealthBadge, ServiceIcon, StatusDot, ToneTag } from "../components/ui";
 import { useLive } from "../data";
 import { ago, healthDisplay, localTime, type Tone } from "../format";
 import { Link, paths, splitServiceId } from "../router";
@@ -128,7 +127,7 @@ function SetupState({ snapshot }: { snapshot: Snapshot }) {
       <ol className="steps">
         <li>Add a service with at least one HTTP, TCP or push check, and test it before saving.</li>
         <li>Configure Telegram in YAML and send a real test message from Settings.</li>
-        <li>Come back here: every service stays visible, problems first.</li>
+        <li>Come back here to see every service and its current status.</li>
       </ol>
       {!snapshot.config_writable && (
         <p className="note">
@@ -149,82 +148,19 @@ function SetupState({ snapshot }: { snapshot: Snapshot }) {
 }
 
 export function Overview() {
-  const { snapshot, live } = useLive();
-  const [site, setSite] = useState("all");
-  if (!snapshot) return <PageTitle title="Your homelab" sub="Waiting for the first snapshot…" />;
-  const open = snapshot.incidents.filter((i) => !i.resolved_at);
-  const services = snapshot.machines.flatMap((m) => m.services);
-  const incidentServices = new Set(open.map((i) => i.service_id));
-  const concern = services.filter(
-    (s) => !incidentServices.has(s.id) && !["healthy", "paused"].includes(s.health),
-  ).length;
-  const sites = [...new Set(snapshot.machines.map((m) => m.site).filter(Boolean))].sort();
-  const machines = snapshot.machines.filter((m) => site === "all" || m.site === site);
+  const { snapshot } = useLive();
+  if (!snapshot) return <p role="status">Waiting for the first snapshot…</p>;
   return (
     <>
-      <PageTitle
-        title="Your homelab"
-        sub={
-          snapshot.machines.length === 0
-            ? "Nothing is monitored yet."
-            : live
-            ? `${services.length} services on ${snapshot.machines.length} machines. Exceptions first; everything else still in view.`
-            : "Showing the last known inventory."
-        }
-      />
-      {(snapshot.machines.length > 0 || open.length > 0) && (
-      <section className="attention" aria-labelledby="incidents-title">
-        <div className="sectionline">
-          <h2 id="incidents-title">Incidents</h2>
-          <Link to={paths.incidents()} className="textlink">
-            History
-          </Link>
-        </div>
-        {open.length > 0 ? (
-          <div className="list">
-            {open.map((i) => (
-              <IncidentRow key={i.id} incident={i} />
-            ))}
-          </div>
-        ) : (
-          <p className="allclear">
-            <ToneTag tone={live ? (concern ? "warn" : "good") : "stale"}>
-              {live
-                ? concern
-                  ? `No open incidents · ${concern} service${concern === 1 ? "" : "s"} need attention`
-                  : "No open incidents · all checks passing"
-                : "No open incidents in the last snapshot"}
-            </ToneTag>
-          </p>
-        )}
-      </section>
-      )}
+      <h1 className="sr">Overview</h1>
       {snapshot.machines.length === 0 ? (
         <SetupState snapshot={snapshot} />
       ) : (
-        <section aria-labelledby="inventory-title">
-          <div className="sectionline">
-            <h2 id="inventory-title">Machines &amp; services</h2>
-            {sites.length > 1 && (
-              <label className="inline-field">
-                <span className="sr">Filter by site</span>
-                <select value={site} onChange={(e) => setSite(e.target.value)}>
-                  <option value="all">All sites</option>
-                  {sites.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-          </div>
-          <div className="hosts">
-            {machines.map((m) => (
-              <MachineCard key={m.id} machine={m} />
-            ))}
-          </div>
-        </section>
+        <div className="hosts">
+          {snapshot.machines.map((m) => (
+            <MachineCard key={m.id} machine={m} />
+          ))}
+        </div>
       )}
     </>
   );
