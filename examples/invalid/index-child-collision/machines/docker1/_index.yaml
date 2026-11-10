@@ -1,0 +1,8 @@
+# Rejected: `services` is defined inline here and also by the sibling
+# directory machines/docker1/services/. Move the inline services into files.
+name: docker1
+services:
+  web:
+    name: Inline web
+    checks:
+      port: {kind: tcp, host: 192.168.10.21, port: 80}

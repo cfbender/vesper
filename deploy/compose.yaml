@@ -1,0 +1,95 @@
+# Reference deployment: Vesper behind an existing Traefik v3 + Authelia
+# forward-auth setup. Copy to /srv/vesper/compose.yaml on the Docker host and
+# follow docs/installation.md. Values marked CHANGE are site-specific.
+#
+# Layout next to this file:
+#   .env          VESPER_IMAGE (non-secret; see deploy/env.example)
+#   vesper.env    secret environment values, 0600 root (see deploy/vesper.env.example)
+#   config/       authoritative YAML           -> /config
+#   data/         SQLite state (vesper.db)      -> /data
+#   secrets/      secret files and CA bundles   -> /run/secrets (read-only)
+#
+# Network design:
+#   vesper-ingress  internal (no internet), fixed subnet, shared ONLY with
+#                   Traefik. Its CIDR is VESPER_TRUSTED_PROXIES: every peer
+#                   on it is treated as an authenticated proxy, so never
+#                   attach anything else to it.
+#   egress          this project's own bridge for outbound HTTP/TCP probes
+#                   and Telegram. Peers here are untrusted and rejected.
+#   No `ports:` are published. Vesper is reachable only through Traefik.
+
+name: vesper
+
+services:
+  vesper:
+    image: ${VESPER_IMAGE:?set VESPER_IMAGE in .env, e.g. vesper:abc1234}
+    container_name: vesper
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 512m
+    stop_grace_period: 20s
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    environment:
+      VESPER_PUBLIC_URL: https://status.example.com        # CHANGE: exact https origin, no path
+      VESPER_TRUSTED_PROXIES: 172.31.250.0/28              # CHANGE with the vesper-ingress subnet
+      # VESPER_CONFIG_READ_ONLY: "true"                    # Git-managed config: UI drafts/tests/exports only
+      # Never set VESPER_DEV_MODE here; it is for local development only.
+    env_file:
+      - path: ./vesper.env
+        required: false
+    volumes:
+      # Writable config lets the UI save YAML. For read-only config append
+      # `:ro` here AND set VESPER_CONFIG_READ_ONLY=true above.
+      - ./config:/config
+      - ./data:/data
+      - ./secrets:/run/secrets:ro
+    networks:
+      - vesper-ingress
+      - egress
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: vesper-ingress
+      traefik.http.services.vesper.loadbalancer.server.port: "8080"
+
+      # Dashboard, UI and management API: always behind Authelia.
+      traefik.http.routers.vesper.rule: Host(`status.example.com`)              # CHANGE
+      traefik.http.routers.vesper.entrypoints: websecure                         # CHANGE to your TLS entrypoint
+      traefik.http.routers.vesper.tls: "true"
+      # traefik.http.routers.vesper.tls.certresolver: letsencrypt              # if Traefik issues certificates
+      traefik.http.routers.vesper.middlewares: authelia@docker                   # CHANGE to your forward-auth middleware
+      traefik.http.routers.vesper.service: vesper
+
+      # Push heartbeats: the ONLY route without Authelia. It matches POST to
+      # exactly /api/heartbeat/<machine>/<service>/<check> and nothing else;
+      # Vesper still requires the check's Authorization: Bearer token.
+      # `$$` is Compose's escape for a literal `$`.
+      traefik.http.routers.vesper-heartbeat.rule: Host(`status.example.com`) && Method(`POST`) && PathRegexp(`^/api/heartbeat/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$$`)
+      traefik.http.routers.vesper-heartbeat.priority: "1000"
+      traefik.http.routers.vesper-heartbeat.entrypoints: websecure               # CHANGE (same as above)
+      traefik.http.routers.vesper-heartbeat.tls: "true"
+      traefik.http.routers.vesper-heartbeat.middlewares: vesper-heartbeat-limit,vesper-heartbeat-body
+      traefik.http.routers.vesper-heartbeat.service: vesper
+      traefik.http.middlewares.vesper-heartbeat-limit.ratelimit.average: "60"
+      traefik.http.middlewares.vesper-heartbeat-limit.ratelimit.period: 1m
+      traefik.http.middlewares.vesper-heartbeat-limit.ratelimit.burst: "30"
+      traefik.http.middlewares.vesper-heartbeat-body.buffering.maxRequestBodyBytes: "1024"
+
+networks:
+  vesper-ingress:
+    # Created once by hand and also joined by Traefik (docs/installation.md):
+    #   docker network create --driver bridge --internal \
+    #     --subnet 172.31.250.0/28 vesper-ingress
+    external: true
+  egress:
+    driver: bridge

@@ -1,0 +1,9 @@
+# Directory-backed machine: `machines/pve1/` is machine `pve1`. This
+# `_index.yaml` holds the machine's own fields; each file in `services/`
+# contributes one service, keyed by its file name.
+name: pve1
+site: Rack
+description: Proxmox VE node hosting docker1 and the NAS VM.
+# Identifies the host probe; services that should be grouped under it
+# declare `depends_on: [pve1/host]` themselves.
+host_service: host

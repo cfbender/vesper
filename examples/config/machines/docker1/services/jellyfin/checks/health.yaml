@@ -1,0 +1,8 @@
+# Check docker1/jellyfin/health. Jellyfin's /health endpoint returns 200
+# with the body "Healthy".
+kind: http
+name: Health endpoint
+url: http://192.168.10.21:8096/health
+expected_status: 200
+body_contains: Healthy
+interval_seconds: 60   # per-check override of defaults.interval_seconds

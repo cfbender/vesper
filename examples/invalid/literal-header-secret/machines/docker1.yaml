@@ -1,0 +1,11 @@
+# Rejected: header values must be secret references ({env: NAME} or
+# {file: name}); a literal credential string is not accepted.
+name: docker1
+services:
+  paperless:
+    checks:
+      api:
+        kind: http
+        url: https://paperless.home.arpa/api/
+        headers:
+          Authorization: "Token do-not-put-credentials-in-yaml"

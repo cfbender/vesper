@@ -1,0 +1,6 @@
+# Machine docker1: a Debian VM on pve1 that runs the Docker services and the
+# Vesper container itself.
+name: docker1
+site: Rack
+description: Docker host VM (runs Traefik, Authelia, Vesper and media apps).
+host_service: host   # dependents declare depends_on: [docker1/host]

@@ -1,0 +1,11 @@
+[Unit]
+Description=Independent Vesper watchdog every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=60s
+AccuracySec=5s
+RandomizedDelaySec=5s
+
+[Install]
+WantedBy=timers.target

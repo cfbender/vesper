@@ -1,0 +1,14 @@
+# Service docker1/jellyfin is split one level further: this `_index.yaml`
+# holds the service fields and `checks/` holds one file per check. Because
+# `checks/` exists, this file must not contain a `checks:` key, and there
+# must not also be a `services/jellyfin.yaml` file.
+name: Jellyfin
+description: Media server.
+depends_on:
+  - docker1/host
+maintenance:
+  # Weekly window (UTC) while the library rescan and updates run. Checks keep
+  # executing; notifications are suppressed.
+  - start: 2026-11-15T04:00:00Z
+    end: 2026-11-15T05:00:00Z
+    repeat_weekly: true

@@ -1,0 +1,32 @@
+# Root of the Vesper configuration (VESPER_CONFIG_DIR, /config in the container).
+#
+# `_index.yaml` contributes fields to the directory that contains it, so this
+# file holds the top-level `defaults`, `network` and `telegram` fields. The
+# `machines` mapping comes from the sibling `machines/` directory and therefore
+# must NOT also appear here (that would be an index/child collision).
+
+defaults:
+  interval_seconds: 30      # run each active check every 30 s
+  timeout_seconds: 5        # per-attempt time limit
+  failure_threshold: 3      # consecutive failures before Down
+  recovery_threshold: 2     # consecutive passes before Healthy again
+  stale_after_seconds: 90   # no fresh result for this long => Stale
+
+network:
+  # Deny-by-default destinations for HTTP and TCP checks. List only the LAN
+  # ranges Vesper should reach. Loopback, link-local, cloud metadata,
+  # multicast and unspecified addresses stay denied even if listed.
+  allowed_cidrs:
+    - 192.168.10.0/24   # servers VLAN
+    - 192.168.20.0/24   # storage VLAN
+  max_concurrent: 16
+  max_response_bytes: 1048576
+  # PEM bundle for an internal CA, stored in VESPER_SECRETS_DIR and named
+  # like a `{file: ...}` secret. TLS verification is never disabled.
+  private_ca_file: homelab-ca.pem
+
+telegram:
+  bot_token: {file: telegram-bot-token}     # /run/secrets/telegram-bot-token
+  chat_id: {env: VESPER_TELEGRAM_CHAT_ID}   # from the container environment
+  dashboard_url: https://status.example.com
+  # reminder_seconds: 3600                  # opt-in reminders for open incidents

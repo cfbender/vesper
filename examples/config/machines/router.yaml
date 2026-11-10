@@ -1,0 +1,33 @@
+# Single-file machine: `machines/router.yaml` defines the whole machine with
+# ID `router` (from the file name). The file does not repeat its own key.
+name: Edge router
+site: Rack
+description: OPNsense gateway, DNS resolver and DHCP for every VLAN.
+# The service whose checks probe the machine itself. It does not make the
+# other services depend on it; each dependent lists it in `depends_on`.
+host_service: gateway
+
+services:
+  gateway:
+    name: Gateway
+    description: Router web UI over HTTPS, signed by the homelab CA.
+    checks:
+      web:
+        kind: http
+        name: Web UI
+        url: https://router.home.arpa/
+        expected_status: 200
+  dns:
+    name: DNS resolver
+    description: Unbound on the router.
+    # A confirmed gateway failure groups this service's notifications under
+    # the gateway incident. Its checks keep running and are rechecked when
+    # the gateway recovers.
+    depends_on:
+      - router/gateway
+    checks:
+      tcp:
+        kind: tcp
+        name: DNS over TCP
+        host: 192.168.10.1
+        port: 53

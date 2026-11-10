@@ -1,0 +1,114 @@
+# Build, test and smoke-test Vesper. This workflow never publishes images,
+# pushes tags, deploys, or uses repository secrets.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust fmt, clippy, tests
+    runs-on: ubuntu-24.04
+    env:
+      # Disposable, allowlistable LAN addresses for probe network tests
+      # (loopback and link-local are always denied by the probe policy).
+      VESPER_TEST_LAN_IPV4: 10.203.44.1
+      VESPER_TEST_LAN_IPV6: fd7a:5e57:44::1
+    steps:
+      - uses: actions/checkout@v7
+      - name: Provision test LAN addresses on dummy0
+        run: |
+          sudo ip link add dummy0 type dummy
+          sudo ip addr add "$VESPER_TEST_LAN_IPV4/24" dev dummy0
+          sudo ip -6 addr add "$VESPER_TEST_LAN_IPV6/64" dev dummy0
+          sudo ip link set dummy0 up
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - name: End-to-end tests against the real binary
+        if: hashFiles('scripts/test_e2e.py') != ''
+        run: cargo build --locked --bin vesper && python3 scripts/test_e2e.py
+
+  web:
+    name: Web build and tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - id: present
+        run: |
+          if [[ -f web/package-lock.json ]]; then echo "web=true" >>"$GITHUB_OUTPUT"
+          else echo "::notice::web/package-lock.json not present; skipping web job"; fi
+      - if: steps.present.outputs.web == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - if: steps.present.outputs.web == 'true'
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run --if-present lint
+          npm run --if-present typecheck
+          npm run --if-present test
+          npm run build
+
+  examples:
+    name: Example scripts and deployment files
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck
+        run: shellcheck -x examples/producers/*.sh examples/watchdog/*.sh deploy/smoke-test.sh
+      - name: Compose file renders
+        run: VESPER_IMAGE=vesper:ci docker compose -f deploy/compose.yaml config --quiet
+      - name: systemd units verify
+        run: |
+          sudo install -d /usr/local/lib/vesper-push
+          sudo install -m 0755 examples/producers/*.sh examples/watchdog/*.sh /usr/local/lib/vesper-push/
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin vesper-push
+          getent group docker >/dev/null || sudo groupadd docker
+          out=$(for u in examples/systemd/*.service examples/systemd/*.timer; do
+            sudo systemd-analyze verify "$u" 2>&1; done | grep -vE "(docker|pveproxy)\.service" || true)
+          if [[ -n $out ]]; then echo "$out"; exit 1; fi
+
+  container:
+    name: Container build and smoke test
+    runs-on: ubuntu-24.04
+    needs: [rust, web]
+    steps:
+      - uses: actions/checkout@v7
+      - id: present
+        run: |
+          if [[ -f web/package-lock.json ]] && grep -rqs 'name = "vesper"' crates/*/Cargo.toml; then
+            echo "app=true" >>"$GITHUB_OUTPUT"
+          else echo "::notice::server binary or web app not present yet; skipping container smoke test"; fi
+      - if: steps.present.outputs.app == 'true'
+        uses: docker/setup-buildx-action@v4
+      - if: steps.present.outputs.app == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          push: false
+          tags: vesper:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=min
+      - if: steps.present.outputs.app == 'true'
+        run: deploy/smoke-test.sh vesper:smoke

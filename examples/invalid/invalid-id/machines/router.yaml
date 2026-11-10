@@ -1,0 +1,7 @@
+# Rejected: service IDs are path segments of ASCII letters, digits, `-` and
+# `_` only; `dns.resolver` contains a dot.
+name: Router
+services:
+  dns.resolver:
+    checks:
+      tcp: {kind: tcp, host: 192.168.10.1, port: 53}

@@ -1,0 +1,37 @@
+# Install on a machine OTHER than the one running Vesper:
+# /etc/systemd/system/vesper-watchdog.service
+# Posts Vesper's own watchdog heartbeat and reports the result to Uptime Kuma.
+[Unit]
+Description=Independent Vesper watchdog (reports to Uptime Kuma)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+EnvironmentFile=/etc/vesper-push/watchdog.env
+LoadCredential=vesper-token:/etc/vesper-push/tokens/docker1-vesper-watchdog
+LoadCredential=kuma-push-url:/etc/vesper-push/kuma-push-url
+ExecStart=/usr/local/lib/vesper-push/vesper-watchdog.sh
+TimeoutStartSec=60
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
