@@ -3,7 +3,8 @@
 # stack; adapt paths and values marked CHANGE. See docs/installation.md.
 #
 # Example paths relative to your Compose file (replace with your own layout):
-#   .env          VESPER_IMAGE and VESPER_AUTH_MIDDLEWARE (see deploy/env.example)
+#   .env          VESPER_IMAGE, VESPER_AUTH_MIDDLEWARE and optional
+#                 VESPER_UID/VESPER_GID (see deploy/env.example)
 #   vesper.env    secret environment values, 0600 root (see deploy/vesper.env.example)
 #   config/       authoritative YAML           -> /config
 #   data/         SQLite state (vesper.db)      -> /data
@@ -25,7 +26,8 @@ services:
     image: ${VESPER_IMAGE:?set VESPER_IMAGE in .env to a ghcr.io/cfbender/vesper tag or digest}
     container_name: vesper
     restart: unless-stopped
-    user: "10001:10001"
+    # Any non-root UID:GID works; config/, data/ and secrets/ must match it.
+    user: "${VESPER_UID:-10001}:${VESPER_GID:-10001}"
     read_only: true
     cap_drop: [ALL]
     security_opt:

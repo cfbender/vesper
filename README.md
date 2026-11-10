@@ -149,7 +149,7 @@ services:
   vesper:
     image: ghcr.io/cfbender/vesper:latest   # or ghcr.io/cfbender/vesper@sha256:…
     restart: unless-stopped
-    user: "10001:10001"
+    user: "10001:10001"                     # or another non-root UID:GID, e.g. 1000:1000
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -159,8 +159,8 @@ services:
       VESPER_PUBLIC_URL: https://status.example.com
       VESPER_TRUSTED_PROXIES: 172.30.0.2/32   # your reverse proxy's address
     volumes:
-      - ./vesper/config:/config               # the YAML above, writable by 10001
-      - ./vesper/data:/data                   # SQLite history, writable by 10001
+      - ./vesper/config:/config               # the YAML above, writable by that user
+      - ./vesper/data:/data                   # SQLite history, writable by that user
       - ./vesper/secrets:/run/secrets:ro
     networks: [proxy]
 

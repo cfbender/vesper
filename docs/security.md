@@ -72,7 +72,7 @@ Push producers ([examples/producers](../examples/producers)) send the token only
 ## Secrets
 
 - YAML holds only references, `{file: name}` (from `VESPER_SECRETS_DIR`, `/run/secrets`) or `{env: NAME}`. Literal values are rejected wherever a secret is expected.
-- Secret files are confined to the secrets directory: one path segment, symlinks only within the root, regular UTF-8 files of at most 64 KiB. Mount that directory read-only, owned by root with group 10001 and mode 0440 or 0750.
+- Secret files are confined to the secrets directory: one path segment, symlinks only within the root, regular UTF-8 files of at most 64 KiB. Mount that directory read-only, owned by root with the container's group (10001 by default) and mode 0440 or 0750.
 - Resolved values never appear in API responses, `vesper export`, error messages, logs or notification messages. Configuration exports keep the references.
 - Environment values are visible through `docker inspect`. Prefer files for credentials.
 - Push tokens are per check. Generate them with `openssl rand -hex 32` and rotate them by replacing both copies.
@@ -91,7 +91,7 @@ Active checks are a server-side request feature, so they are constrained:
 
 | Control | Reference setting |
 | --- | --- |
-| User | UID:GID 10001:10001 (image default and `user:` in compose) |
+| User | Non-root; UID:GID 10001:10001 by default (image default and `user:` in compose, overridable with `VESPER_UID`/`VESPER_GID`) |
 | Root filesystem | `read_only: true`. Writable mounts: `/data` (SQLite), `/config` only in writable mode, and a small `noexec` tmpfs at `/tmp` |
 | Capabilities | `cap_drop: [ALL]`, `no-new-privileges:true` |
 | Resources | `pids_limit: 256`, `mem_limit: 512m`, rotated JSON logs |

@@ -96,8 +96,8 @@ To revoke a grant, remove it and recreate Vesper while keeping that machine in d
 
 ### The Docker host running Vesper
 
-1. Make sure the machine exists as `config/machines/<machine>/_index.yaml`, and that the configuration directory is writable by UID 10001. Discovery cannot be combined with `VESPER_CONFIG_READ_ONLY=true`; Vesper refuses to start with both.
-2. In the [reference Compose file](../deploy/compose.yaml), uncomment `VESPER_DISCOVER_DOCKER`, the socket mount and `group_add`, set the machine ID, and set `DOCKER_GID` in `.env` to the output of `stat -c %g /var/run/docker.sock`. The container keeps running as UID 10001 with a read-only root and no capabilities; `group_add` only lets it open the socket.
+1. Make sure the machine exists as `config/machines/<machine>/_index.yaml`, and that the configuration directory is writable by the container's UID (10001 by default). Discovery cannot be combined with `VESPER_CONFIG_READ_ONLY=true`; Vesper refuses to start with both.
+2. In the [reference Compose file](../deploy/compose.yaml), uncomment `VESPER_DISCOVER_DOCKER`, the socket mount and `group_add`, set the machine ID, and set `DOCKER_GID` in `.env` to the output of `stat -c %g /var/run/docker.sock`. The container keeps running as its non-root UID with a read-only root and no capabilities; `group_add` only lets it open the socket.
    ```yaml
    environment:
      VESPER_DISCOVER_DOCKER: docker1=unix:///var/run/docker.sock

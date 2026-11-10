@@ -15,7 +15,7 @@ services:
   vesper:
     image: ghcr.io/cfbender/vesper:latest
     restart: unless-stopped
-    user: "10001:10001"
+    user: "10001:10001" # any non-root UID:GID; see Storage and permissions
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -41,13 +41,15 @@ The image listens on **8080** and includes its own health check. Point your prox
 
 Host paths are entirely up to you; bind mounts, named volumes and your existing secret provisioning can all be used. These container paths are the defaults:
 
-| Mount | Purpose | Required access for UID:GID `10001:10001` |
+| Mount | Purpose | Required access for the container user |
 | --- | --- | --- |
 | `/config` | Authoritative YAML, including UI edits | Read/write, or read-only as below |
 | `/data` | SQLite history, incidents, delivery state and uploaded icons | Read/write; persistent, local storage |
 | `/run/secrets` | Optional credential files and private CA bundles | Read-only; mount only what Vesper needs |
 
-Create bind-mount directories before starting and give UID/GID 10001 the listed access. With named volumes, ensure the configuration is populated and permissions are correct. Do not run as root to work around permissions, and never mount the Docker socket.
+The image runs as UID:GID `10001:10001` by default. Any other non-root UID:GID works too: set it with `user:`, or with `VESPER_UID` and `VESPER_GID` in `.env` for the [reference Compose file](../deploy/compose.yaml). For example, use `1000:1000` to keep the host files owned by your own account. Vesper doesn't need the user to exist in the image, so no PUID/PGID variables, entrypoint chown or permissions container is involved.
+
+Create bind-mount directories before starting and give the chosen UID/GID the listed access. With named volumes, Docker copies the image's ownership (10001) into a new, empty volume, so fix ownership yourself if you run as another user. Do not run as root to work around permissions, and never mount the Docker socket.
 
 For Git-managed or read-only configuration, mount `/config:ro` and set `VESPER_CONFIG_READ_ONLY: "true"`. The editor then offers drafts, tests and exports without saving. Otherwise UI edits write the same YAML files you manage on disk. `/data` must stay writable in either mode. See the [environment variable reference](../README.md#install-from-ghcr) if you need different container paths.
 
@@ -103,7 +105,7 @@ Check your intended access boundary too: excluded clients must not reach managem
 
 ## Optional notifications and push checks
 
-**Notifications:** pick one or more channel kinds from [notifications](notifications.md). For Telegram, create a bot with BotFather, message it or add it to your group, and obtain the chat ID. Mount credential files such as `telegram-bot-token` and `telegram-chat-id` under `/run/secrets`, readable by UID/GID 10001 but not other users. Add this to the root configuration:
+**Notifications:** pick one or more channel kinds from [notifications](notifications.md). For Telegram, create a bot with BotFather, message it or add it to your group, and obtain the chat ID. Mount credential files such as `telegram-bot-token` and `telegram-chat-id` under `/run/secrets`, readable by the container's UID/GID but not other users. Add this to the root configuration:
 
 ```yaml
 notifications:
@@ -131,7 +133,7 @@ To update, select a published GHCR tag/digest, keep the previous digest and a pr
 
 | Symptom | Check |
 | --- | --- |
-| Container exits or is unhealthy | Logs, valid YAML, HTTPS `VESPER_PUBLIC_URL`, and writable `/data` for UID 10001 |
+| Container exits or is unhealthy | Logs, valid YAML, HTTPS `VESPER_PUBLIC_URL`, and writable `/data` for the container's UID (10001 unless overridden) |
 | Dashboard/API returns 403 | Actual proxy peer address against `VESPER_TRUSTED_PROXIES`; proxy network selection |
 | Browser edits return 403 | Browser origin matches `VESPER_PUBLIC_URL`; proxy preserves Origin and CSRF headers |
 | Checks say destination not allowed | Resolved target address against `network.allowed_cidrs`; no loopback/link-local targets |
