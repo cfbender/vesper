@@ -79,9 +79,11 @@ export function Layout({ children }: { children: ReactNode }) {
           )}
           {nav("settings", paths.settings(), "Settings")}
         </nav>
-        <Link to={paths.newService()} className="btn primary add">
-          <span aria-hidden="true">+</span> Add service
-        </Link>
+        {snapshot?.config_writable && (
+          <Link to={paths.newService()} className="btn primary add">
+            <span aria-hidden="true">+</span> Add service
+          </Link>
+        )}
       </header>
       <main id="main" className="content">
         <div className="banners">

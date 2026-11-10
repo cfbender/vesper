@@ -132,6 +132,7 @@ export function fixtureConfig(machines = fixtureMachines(), revision = "r-7c1f3e
   return {
     revision,
     writable: true,
+    read_only_reason: null,
     defaults: { interval_seconds: 30, timeout_seconds: 5, failure_threshold: 3, recovery_threshold: 2, stale_after_seconds: 90 },
     network: { allowed_cidrs: ["192.168.1.0/24", "10.0.5.0/24"], max_concurrent: 16, max_response_bytes: 1048576, private_ca_file: null },
     machines,

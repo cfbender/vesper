@@ -122,24 +122,22 @@ function SetupState({ snapshot }: { snapshot: Snapshot }) {
     <section className="card setup" aria-labelledby="setup-title">
       <h2 id="setup-title">Bring your homelab into view</h2>
       <p>
-        No machines are configured yet. Add a first service here, or write YAML files in the
-        configuration root and Vesper reloads them automatically.
+        No machines are configured yet.{" "}
+        {snapshot.config_writable
+          ? "Add a first service here, or write YAML files in the configuration root and Vesper reloads them automatically."
+          : "Configuration is read-only, so write YAML files in the configuration root; Vesper reloads them automatically."}
       </p>
       <ol className="steps">
-        <li>Add a service with at least one HTTP, TCP or push check, and test it before saving.</li>
+        <li>Add a service with at least one HTTP, TCP or push check.</li>
         <li>Configure notification channels in YAML and send a real test message from Settings.</li>
         <li>Come back here to see every service and its current status.</li>
       </ol>
-      {!snapshot.config_writable && (
-        <p className="note">
-          Configuration is read-only. The editor can still draft, test and export YAML for you to place
-          in the configuration root.
-        </p>
-      )}
       <div className="actions">
-        <Link to={paths.newService()} className="btn primary">
-          Add a service
-        </Link>
+        {snapshot.config_writable && (
+          <Link to={paths.newService()} className="btn primary">
+            Add a service
+          </Link>
+        )}
         <Link to={paths.settings()} className="btn">
           Settings &amp; notifications
         </Link>

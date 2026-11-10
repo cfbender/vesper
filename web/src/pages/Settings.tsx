@@ -204,7 +204,10 @@ export function SettingsPage() {
                 config.writable ? (
                   <ToneTag tone="good">Writable</ToneTag>
                 ) : (
-                  <ToneTag tone="neutral">Read-only: draft, test and export only</ToneTag>
+                  <>
+                    <ToneTag tone="neutral">Read-only</ToneTag>
+                    {config.read_only_reason && <p className="note">{config.read_only_reason}</p>}
+                  </>
                 )
               ) : (
                 "—"
@@ -296,8 +299,8 @@ export function SettingsPage() {
           </dl>
           <h2 id="net-title">Network policy</h2>
           <p className="note">
-            Read-only. Checks may only reach allowed networks; loopback, link-local and cloud metadata
-            addresses are always denied.
+            Checks may only reach allowed networks; loopback, link-local and cloud metadata addresses
+            are always denied. Edit in YAML.
           </p>
           <dl className="factgrid">
             <div>

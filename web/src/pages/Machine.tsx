@@ -70,9 +70,11 @@ export function MachinePage({ machineId }: { machineId: string }) {
       <section aria-labelledby="machine-services">
         <div className="sectionline">
           <h2 id="machine-services">Services</h2>
-          <Link to={paths.newService(machine.id)} className="btn small">
-            Add service here
-          </Link>
+          {snapshot.config_writable && (
+            <Link to={paths.newService(machine.id)} className="btn small">
+              Add service here
+            </Link>
+          )}
         </div>
         <div className="list">
           {machine.services.map((s) => {

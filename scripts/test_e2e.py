@@ -213,6 +213,7 @@ def main():
             assert service("web")["checks"][0]["history"], "history lost across restart"
             read_only = call("/api/config")
             assert read_only["writable"] is False
+            assert read_only["read_only_reason"] == "VESPER_CONFIG_READ_ONLY is true"
             call("/api/services/home/web", {"revision": read_only["revision"], "service": updated_service}, method="PUT", expected=403)
             allowed = call("/api/draft/test", {"checks": configuration["machines"]["home"]["services"]["web"]["checks"]})
             assert allowed["results"]["http"]["healthy"] is True

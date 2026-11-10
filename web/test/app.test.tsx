@@ -276,17 +276,19 @@ describe("service editor", () => {
     expect(writes()).toHaveLength(0);
   });
 
-  it("allows draft and export but not saving when configuration is read-only", async () => {
-    config = { ...config, writable: false };
-    renderAt("/services/jelly/jellyfin/edit");
+  it("offers no editing when configuration is read-only", async () => {
+    config = { ...config, writable: false, read_only_reason: "VESPER_CONFIG_READ_ONLY is true" };
+    snapshot = { ...snapshot, config_writable: false };
+    renderAt("/services/jelly/jellyfin");
+    expect(await screen.findByRole("button", { name: "Recheck now" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Edit service" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Add service/ })).not.toBeInTheDocument();
+
+    act(() => void navigate("/services/jelly/jellyfin/edit"));
     expect(await screen.findByText("Configuration is read-only")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save & monitor" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Save paused" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Test this check" })).toBeEnabled();
-    const yaml = screen.getByLabelText("YAML export").textContent!;
-    expect(yaml).toContain("env: JELLYFIN_TOKEN");
-    expect(yaml).toContain("failure_threshold: 4");
-    expect(yaml).not.toContain("null");
+    expect(screen.getByText(/VESPER_CONFIG_READ_ONLY is true/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save & monitor" })).not.toBeInTheDocument();
   });
 
   it("asks before leaving with unsaved edits", async () => {

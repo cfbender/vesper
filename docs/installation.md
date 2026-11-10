@@ -51,7 +51,7 @@ The image runs as UID:GID `10001:10001` by default. Any other non-root UID:GID w
 
 Create bind-mount directories before starting and give the chosen UID/GID the listed access. With named volumes, Docker copies the image's ownership (10001) into a new, empty volume, so fix ownership yourself if you run as another user. Do not run as root to work around permissions, and never mount the Docker socket.
 
-For Git-managed or read-only configuration, mount `/config:ro` and set `VESPER_CONFIG_READ_ONLY: "true"`. The editor then offers drafts, tests and exports without saving. Otherwise UI edits write the same YAML files you manage on disk. `/data` must stay writable in either mode. See the [environment variable reference](../README.md#install-from-ghcr) if you need different container paths.
+For Git-managed or read-only configuration, mount `/config:ro` and set `VESPER_CONFIG_READ_ONLY: "true"`. The UI is then view-only: it hides adding and editing services, and Settings shows why configuration is read-only. A `/config` that the container's UID can't write is treated the same way. Otherwise UI edits write the same YAML files you manage on disk. `/data` must stay writable in either mode. See the [environment variable reference](../README.md#install-from-ghcr) if you need different container paths.
 
 ### Proxy and network
 

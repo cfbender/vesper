@@ -114,8 +114,13 @@ async fn snapshot(State(app): State<App>) -> ApiResult<Json<Snapshot>> {
 }
 async fn configuration(State(app): State<App>) -> Json<Value> {
     let loaded = app.loaded.lock().await;
+    let read_only_reason = match (loaded.writable, app.config_read_only) {
+        (true, _) => None,
+        (false, true) => Some("VESPER_CONFIG_READ_ONLY is true"),
+        (false, false) => Some("Vesper's user cannot write to the configuration directory"),
+    };
     Json(
-        json!({"revision":loaded.revision,"writable":loaded.writable,"defaults":loaded.config.defaults,"machines":loaded.config.machines,"sources":loaded.sources,"notification_channels":notification_channels(&loaded.config),"network":loaded.config.network}),
+        json!({"revision":loaded.revision,"writable":loaded.writable,"read_only_reason":read_only_reason,"defaults":loaded.config.defaults,"machines":loaded.config.machines,"sources":loaded.sources,"notification_channels":notification_channels(&loaded.config),"network":loaded.config.network}),
     )
 }
 
@@ -174,7 +179,7 @@ async fn save_service(
     if !app.loaded.lock().await.writable {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
-            "Configuration is read-only; export the draft YAML instead".into(),
+            "Configuration is read-only; edit the YAML files instead".into(),
         ));
     }
     let root = app.config_dir.clone();
@@ -197,7 +202,7 @@ async fn save_machine(
     if !app.loaded.lock().await.writable {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
-            "Configuration is read-only; export the draft YAML instead".into(),
+            "Configuration is read-only; edit the YAML files instead".into(),
         ));
     }
     let root = app.config_dir.clone();

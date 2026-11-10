@@ -22,7 +22,7 @@ import {
 } from "../editor/draft";
 import { TextArea, TextField, Toggle } from "../editor/fields";
 import { IconPicker } from "../editor/IconPicker";
-import { navigate, paths, useNavigationBlocker } from "../router";
+import { Link, navigate, paths, useNavigationBlocker } from "../router";
 import type { CheckKind, ConfigResponse, MaintenanceWindow, Service } from "../types";
 import { useConfig } from "./Settings";
 
@@ -101,6 +101,27 @@ export function EditorPage({
       ]
     : [{ label: "Overview", to: paths.overview() }, { label: "Add service" }];
 
+  if (config && !config.writable)
+    return (
+      <>
+        <Crumbs items={crumbs} />
+        <PageTitle title={title} />
+        <Notice tone="neutral" title="Configuration is read-only">
+          <p>
+            Vesper can’t save changes{config.read_only_reason ? `: ${config.read_only_reason}` : ""}. Edit the
+            YAML files in the configuration root instead; Vesper reloads them automatically.
+          </p>
+          <div className="actions">
+            <Link to={editing ? paths.service(machineId, serviceId) : paths.overview()} className="btn">
+              {editing ? "Back to service" : "Back to overview"}
+            </Link>
+            <Link to={paths.settings()} className="btn">
+              Configuration details
+            </Link>
+          </div>
+        </Notice>
+      </>
+    );
   if (notFound)
     return (
       <>
@@ -147,7 +168,6 @@ export function EditorPage({
   const setWindows = (fn: (w: MaintenanceWindow[]) => MaintenanceWindow[]) =>
     setService({ maintenance: fn(draft.service.maintenance) });
 
-  const writable = config.writable;
   const sources = serviceSources(config, draft.machineId, draft.serviceId);
   const allServiceIds = Object.entries(config.machines)
     .flatMap(([m, mc]) => Object.keys(mc.services).map((s) => `${m}/${s}`))
@@ -250,14 +270,6 @@ export function EditorPage({
         }
       />
       <div className="banners">
-        {!writable && (
-          <Notice tone="neutral" title="Configuration is read-only">
-            <p>
-              You can draft, test and export YAML, but saving is disabled. Place the exported YAML in the
-              configuration root yourself.
-            </p>
-          </Notice>
-        )}
         {revisionMoved && (
           <Notice tone="warn" title="Configuration changed since you opened this editor">
             <p>
@@ -644,10 +656,10 @@ export function EditorPage({
             )}
           </div>
           <div className="actions">
-            <button type="submit" className="btn primary" disabled={!writable || saving}>
+            <button type="submit" className="btn primary" disabled={saving}>
               {editing && original?.paused ? "Save & resume monitoring" : "Save & monitor"}
             </button>
-            <button type="button" className="btn" disabled={!writable || saving} onClick={() => save(true)}>
+            <button type="button" className="btn" disabled={saving} onClick={() => save(true)}>
               Save paused
             </button>
             <button

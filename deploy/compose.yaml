@@ -40,7 +40,7 @@ services:
     environment:
       VESPER_PUBLIC_URL: https://status.example.com        # CHANGE: exact https origin, no path
       VESPER_TRUSTED_PROXIES: 172.31.250.0/28              # CHANGE with the vesper-ingress subnet
-      # VESPER_CONFIG_READ_ONLY: "true"                    # Git-managed config: UI drafts/tests/exports only
+      # VESPER_CONFIG_READ_ONLY: "true"                    # Git-managed config: UI is view-only
       # Optional Docker label discovery (docs/discovery.md). Also uncomment the
       # socket mount and group_add below. Socket access is root-equivalent.
       # VESPER_DISCOVER_DOCKER: docker1=unix:///var/run/docker.sock  # CHANGE machine ID

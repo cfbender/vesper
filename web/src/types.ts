@@ -181,6 +181,8 @@ export interface NotificationKind {
 export interface ConfigResponse {
   revision: string;
   writable: boolean;
+  /** Why saving is disabled; null when writable. */
+  read_only_reason: string | null;
   defaults: CheckDefaults;
   network: NetworkPolicy;
   machines: Record<string, Machine>;

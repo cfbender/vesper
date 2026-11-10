@@ -206,9 +206,11 @@ export function ServicePage({ machineId, serviceId }: { machineId: string; servi
         >
           {recheck.busy ? "Queueing…" : "Recheck now"}
         </button>
-        <Link to={paths.editService(machineId, serviceId)} className="btn">
-          Edit service
-        </Link>
+        {snapshot.config_writable && (
+          <Link to={paths.editService(machineId, serviceId)} className="btn">
+            Edit service
+          </Link>
+        )}
         {silenced ? (
           <button className="btn" disabled={silence.busy} onClick={() => runSilence(null)}>
             Resume notifications

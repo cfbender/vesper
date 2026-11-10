@@ -73,7 +73,7 @@ Valid configuration: 2 machines, 4 services, 5 checks. Revision sha256:…
 - Active checks run every 30 s with a 5 s timeout. A check is Down after 3 consecutive failures and recovers after 2 passes. Override these values under `defaults:` or on any check.
 - `allowed_cidrs` is deny-by-default. Loopback, link-local and cloud metadata addresses stay blocked even if listed.
 - Secrets are references, never literals: `{file: name}` reads `/run/secrets/name`, and `{env: NAME}` reads the container environment.
-- The UI's editor saves back to these same files. It rewrites only what you changed, and refuses a save that would drop a comment. With `VESPER_CONFIG_READ_ONLY=true`, for Git-managed config, it drafts, tests and exports instead.
+- The UI's editor saves back to these same files. It rewrites only what you changed, and refuses a save that would drop a comment. With `VESPER_CONFIG_READ_ONLY=true`, for Git-managed config, or when Vesper's user can't write to the config directory, the UI is view-only and Settings says why.
 - One file is enough to start. You can later split machines, services and checks into directories, as in [examples/config](examples/config).
 
 Push checks invert the direction: a job on another host reports to Vesper, and a missed `expected_interval_seconds + grace_seconds` opens an incident. The token goes in a header and is read from stdin, so it never appears in a URL or argument list:
@@ -186,7 +186,7 @@ The image runs `vesper serve` by default. Other commands are `vesper validate`, 
 | `VESPER_PUBLIC_URL` | (required) | Exact `https://` origin that users reach, with no path. Used for Origin/CSRF checks and links |
 | `VESPER_TRUSTED_PROXIES` | (none) | Comma-separated CIDRs of the reverse proxy's immediate address. Other peers get 403 |
 | `VESPER_CONFIG_DIR` | `/config` | YAML root |
-| `VESPER_CONFIG_READ_ONLY` | `false` | `true` makes the UI draft/test/export-only |
+| `VESPER_CONFIG_READ_ONLY` | `false` | `true` makes the UI view-only: no adding or editing services |
 | `VESPER_DATA_DIR` | `/data` | SQLite (`vesper.db`) and uploaded icons |
 | `VESPER_SECRETS_DIR` | `/run/secrets` | Files for `{file: name}` references and the private CA |
 | `VESPER_STATIC_DIR` | `/app/web` | Built web UI |
