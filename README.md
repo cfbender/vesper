@@ -2,7 +2,7 @@
 
 Vesper is a homelab status monitor: one Rust/Axum process with a bundled React UI, SQLite history, YAML as the only configuration authority, and Telegram notifications. It runs HTTP(S), TCP and push-heartbeat checks across your machines and groups them into services and incidents. It runs behind a reverse proxy with optional authentication. **Vesper has no built-in login: without external authentication, anyone who can reach it has full administrator access.**
 
-- **Install:** [docs/installation.md](docs/installation.md) is a step-by-step runbook, written so an agent can follow it. It covers YAML layout, secrets, validation, external authentication, producers, Telegram, drills, the watchdog, upgrades and backups.
+- **Install:** [Add Vesper to your stack](docs/installation.md): a Compose service, storage requirements, initial configuration and startup checks. Adapt it to your existing paths and proxy.
 - **Security model:** [docs/security.md](docs/security.md)
 - **Configuration reference:** [crates/core/CONFIGURATION.md](crates/core/CONFIGURATION.md), including supported layouts and save guarantees.
 - **Architecture and API contract:** [docs/architecture.md](docs/architecture.md)
@@ -24,7 +24,7 @@ docker pull ghcr.io/cfbender/vesper:latest
 docker image inspect --format '{{index .RepoDigests 0}}' ghcr.io/cfbender/vesper:latest
 ```
 
-Use that digest as `VESPER_IMAGE` with the [reference Compose deployment](deploy/compose.yaml). Follow the [installation runbook](docs/installation.md) for proxy authentication, secrets, inventory and verification. Do not publish the backend port directly.
+Use the image tag or digest in your Compose service's `image:` field. The [installation guide](docs/installation.md) has a minimal service to merge into your stack; the [Traefik example](deploy/compose.yaml) includes routing labels and uses `VESPER_IMAGE` for interpolation. Do not publish the backend port directly.
 
 The image runs `vesper serve` by default. Other commands: `vesper validate` checks the configuration under `VESPER_CONFIG_DIR`, `vesper export` prints the assembled configuration as one block YAML document with secret references only, and `vesper healthcheck` probes the local liveness endpoint.
 

@@ -16,7 +16,7 @@
 #      alerts after its own heartbeat interval.
 #
 # It does not prove that Vesper's scheduler is running active checks or that
-# Telegram delivery works; see docs/installation.md, "Independent watchdog".
+# Telegram delivery works; verify recent check results and Telegram separately.
 #
 # Environment:
 #   VESPER_WATCHDOG_CHECK_ID  default docker1/vesper/watchdog

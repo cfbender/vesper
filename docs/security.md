@@ -19,11 +19,41 @@ Traefik is the reference deployment, not a runtime dependency. Another reverse p
 2. Route allowed requests to Vesper over a private network. Set `VESPER_TRUSTED_PROXIES` to the **immediate TCP peer addresses** of the proxy, preferably exact `/32` or `/128` addresses, or an isolated subnet containing only trusted proxies and Vesper. Never list all LAN clients or `0.0.0.0/0`. Vesper does not use `Forwarded`, `X-Forwarded-For`, identity headers, provider cookies, or a proxy-supplied username to decide who is an administrator. Requests from a trusted peer are already admin-equivalent; the peer check cannot verify that your proxy actually authenticated them.
 3. Set `VESPER_PUBLIC_URL` to the externally visible HTTPS origin without a path. Preserve browser `Origin`, `Sec-Fetch-Site` and `X-Vesper-CSRF`; do not replace an untrusted Origin with the configured one. Preserve the public host/scheme through your auth layer for its redirects. Sanitize client-supplied forwarding and identity headers at your proxy's trust boundary according to its documentation. Vesper does not need identity response headers and does not attribute audit entries to an asserted user.
 4. If push producers bypass interactive authentication, exempt only the exact POST heartbeat route below. Preserve its `Authorization: Bearer` header unchanged. Do not exempt the `/api` prefix, all heartbeat methods, or an entire domain. Apply the body and rate limits at the proxy; producers must never receive an HTML login page for a valid heartbeat.
-5. Verify direct-backend rejection, spoofed headers, CSRF enforcement and heartbeat isolation using installation phase 10. With authentication, also verify denied/admitted users and authentication-service failure; a login screen alone does not prove the API is protected. Without authentication, verify your intended network restrictions and record that allowed clients get administrator access without logging in.
+5. Verify that untrusted backend peers get 403 even with spoofed forwarding/identity headers, and management mutations with a missing CSRF token or wrong Origin get 403. With authentication, also verify denied/admitted users and authentication-service failure; a login screen alone does not prove the API is protected. Without authentication, verify your intended network restrictions and that allowed clients get administrator access without logging in.
+
+## Optional authentication examples
+
+Reuse your existing proxy authentication if you have it. With the [Traefik reference Compose file](../deploy/compose.yaml), set `VESPER_AUTH_MIDDLEWARE` to its middleware name and provider, such as `admin-auth@file`. Leaving it empty disables proxy authentication; the administrator-access warning still applies. These examples go in Traefik's dynamic file configuration, not Vesper's YAML.
+
+**BasicAuth:** mount a bcrypt htpasswd file read-only into Traefik at `/run/secrets/vesper-users`, accessible only to its runtime user. Create/manage users with an interactive `htpasswd` prompt, not passwords in command arguments or Compose labels. Use HTTPS; BasicAuth provides passwords, not SSO/MFA. See [Traefik's BasicAuth guide](https://doc.traefik.io/traefik/middlewares/http/basicauth/).
+
+```yaml
+http:
+  middlewares:
+    vesper-auth:
+      basicAuth:
+        usersFile: /run/secrets/vesper-users
+        removeHeader: true
+```
+
+Set `VESPER_AUTH_MIDDLEWARE=vesper-auth@file`. Apply it to the management router only: heartbeat requests need their bearer header intact.
+
+**Authelia (SSO/MFA):** for an existing installation, follow the [Traefik integration](https://www.authelia.com/integration/proxies/traefik/) and [session configuration](https://www.authelia.com/configuration/session/introduction/) guides. Its HTTPS login portal and cookie domain must cover Vesper's hostname; provision users and MFA in Authelia. This example assumes Traefik can reach `authelia:9091` on a private auth network:
+
+```yaml
+http:
+  middlewares:
+    authelia:
+      forwardAuth:
+        address: http://authelia:9091/api/authz/forward-auth
+        trustForwardHeader: true
+```
+
+Set `VESPER_AUTH_MIDDLEWARE=authelia@file`. Merge the [access-control rule](../deploy/authelia-access-control.yml) before broader matching rules, adapting its domain and administrator group. Don't add an Authelia bypass rule; only the exact heartbeat router omits the auth middleware. Keep Traefik's `forwardedHeaders.insecure` and `proxyProtocol.insecure` false and trust forwarding headers only from actual upstream proxies. Use verified TLS for an auth hop outside a private trusted network. Vesper needs no identity response headers or Authelia backend access.
 
 ## The heartbeat exception
 
-When proxy authentication is enabled, exactly one route skips it: `POST` to `/api/heartbeat/<machine>/<service>/<check>`, with three ID segments of `A-Z a-z 0-9 _ -` (1–80 characters each). The Traefik rule uses an anchored `PathRegexp` and `Method(POST)`, at a higher priority than the main router. It adds a per-source rate limit and a 1 KiB body limit. Other methods, depths, prefixes and encoded variants fall through to the management router. Heartbeat tokens are required even when management authentication is disabled. [installation.md](installation.md) phase 10 lists the checks that prove this.
+When proxy authentication is enabled, exactly one route skips it: `POST` to `/api/heartbeat/<machine>/<service>/<check>`, with three ID segments of `A-Z a-z 0-9 _ -` (1–80 characters each). The Traefik rule uses an anchored `PathRegexp` and `Method(POST)`, at a higher priority than the main router. It adds a per-source rate limit and a 1 KiB body limit. Other methods, depths, prefixes and encoded variants fall through to the management router. Heartbeat tokens are required even when management authentication is disabled. Verify a valid bearer heartbeat succeeds, a token-less one returns Vesper's JSON 401, and other routes still follow your management access policy.
 
 On that route, Vesper:
 

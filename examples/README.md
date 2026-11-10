@@ -8,7 +8,7 @@
 | [`systemd/`](systemd) | Hardened service and timer units and env files for the producers and the watchdog. |
 | [`watchdog/`](watchdog) | The independent watchdog, which proves that Vesper accepts heartbeats and reports to Uptime Kuma. |
 
-Secret references in `config/` name files under `VESPER_SECRETS_DIR`. None of them are included. [`docs/installation.md`](../docs/installation.md) explains how to create each one, how to install the producers, and how to verify everything.
+Secret references in `config/` name files under `VESPER_SECRETS_DIR`. None of them are included. Start with the small configuration in the [installation guide](../docs/installation.md), or adapt this inventory to your targets and provision its referenced secrets. Producer scripts document their required variables; adjust the systemd units' paths, credentials and schedules to your hosts.
 
 Every producer:
 

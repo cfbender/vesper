@@ -1,8 +1,8 @@
 # Reference deployment: Vesper behind Traefik v3 with an optional authentication
-# middleware of your choice. Copy to /srv/vesper/compose.yaml on the Docker host and
-# follow docs/installation.md. Values marked CHANGE are site-specific.
+# middleware of your choice. Merge the service and relevant networks into your
+# stack; adapt paths and values marked CHANGE. See docs/installation.md.
 #
-# Layout next to this file:
+# Example paths relative to your Compose file (replace with your own layout):
 #   .env          VESPER_IMAGE and VESPER_AUTH_MIDDLEWARE (see deploy/env.example)
 #   vesper.env    secret environment values, 0600 root (see deploy/vesper.env.example)
 #   config/       authoritative YAML           -> /config
@@ -87,7 +87,8 @@ services:
 
 networks:
   vesper-ingress:
-    # Created once by hand and also joined by Traefik (docs/installation.md):
+    # Example isolated proxy network, also joined by Traefik. Reuse an existing
+    # suitable network or provision this one to match your stack:
     #   docker network create --driver bridge --internal \
     #     --subnet 172.31.250.0/28 vesper-ingress
     external: true
