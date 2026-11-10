@@ -82,6 +82,93 @@ async fn flapping_check_opens_one_incident_and_needs_two_consecutive_passes() {
 }
 
 #[tokio::test]
+async fn check_stats_report_uptime_windows_passing_latency_and_state_changes() {
+    let h = Harness::new(web_config());
+    h.prober.set(WEB, false);
+    h.tick().await; // 12:00:00 F: suspect
+    steps(&h, WEB, "FFPP").await; // down at 12:01:00, healthy at 12:02:00
+    h.clock.advance(88 * 60); // 13:30:00
+    h.tick().await;
+    steps(&h, WEB, "P").await;
+
+    let stats = h.engine.lock().await.check_stats(WEB).unwrap();
+    let window = |seconds: u64| {
+        stats
+            .windows
+            .iter()
+            .find(|w| w.seconds == seconds)
+            .unwrap()
+            .stats
+            .clone()
+    };
+    let passing = |passes, failures| SampleStats {
+        passes,
+        failures,
+        latency_avg_ms: Some(12.0),
+        latency_min_ms: Some(12),
+        latency_max_ms: Some(12),
+    };
+    assert_eq!(
+        window(3600),
+        passing(2, 0),
+        "12:0x samples are over an hour old"
+    );
+    assert_eq!(
+        window(86400),
+        passing(4, 3),
+        "failed 5000 ms probes are not latency"
+    );
+    assert_eq!(window(365 * 86400), passing(4, 3));
+    assert_eq!(
+        stats.hours,
+        vec![
+            StatsHour {
+                hour: "2026-11-10T12:00:00.000Z".into(),
+                stats: passing(2, 3)
+            },
+            StatsHour {
+                hour: "2026-11-10T13:00:00.000Z".into(),
+                stats: passing(2, 0)
+            },
+        ]
+    );
+    let events: Vec<_> = stats
+        .events
+        .iter()
+        .map(|e| (e.at.as_str(), e.health))
+        .collect();
+    assert_eq!(
+        events,
+        [
+            ("2026-11-10T12:02:00.000Z", Health::Healthy),
+            ("2026-11-10T12:01:30.000Z", Health::Recovering),
+            ("2026-11-10T12:01:00.000Z", Health::Down),
+            ("2026-11-10T12:00:00.000Z", Health::Suspect),
+        ],
+        "a pass after the gap is no state change"
+    );
+    assert_eq!(stats.events[2].message, "HTTP 503 body-evidence-xyz");
+
+    let h = Harness::new(backup_config());
+    h.engine.lock().await.heartbeat(JOB, true).unwrap();
+    h.step(361).await; // missed deadline
+    let stats = h.engine.lock().await.check_stats(JOB).unwrap();
+    assert_eq!(
+        stats.windows[0].stats,
+        SampleStats {
+            passes: 1,
+            ..SampleStats::default()
+        },
+        "heartbeats have no latency and a missed deadline adds no sample"
+    );
+    let events: Vec<_> = stats.events.iter().map(|e| e.health).collect();
+    assert_eq!(events, [Health::Down, Health::Healthy]);
+    assert!(stats.events[0]
+        .message
+        .starts_with("No heartbeat by deadline"));
+}
+
+#[tokio::test]
 async fn restart_preserves_incident_and_delivery_and_requires_new_evidence() {
     let cfg = config(&[(
         "jelly",

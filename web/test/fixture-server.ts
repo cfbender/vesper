@@ -9,7 +9,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { fixtureConfig, fixtureKinds, fixtureSnapshot, type Scenario } from "./fixtures.ts";
+import { fixtureConfig, fixtureKinds, fixtureSnapshot, fixtureStats, type Scenario } from "./fixtures.ts";
 import type { IconEntry } from "../src/types.ts";
 
 const root = fileURLToPath(new URL("../dist/", import.meta.url));
@@ -67,6 +67,13 @@ async function api(req: IncomingMessage, res: ServerResponse, url: URL) {
     return send(res, 200, { ...snap, config_error: configError });
   }
   if (p === "/api/config") return send(res, 200, config);
+  const st = p.match(/^\/api\/checks\/([^/]+)\/([^/]+)\/([^/]+)\/stats$/);
+  if (st) {
+    const id = st.slice(1, 4).join("/");
+    const snap = fixtureSnapshot(config, scenario === "disconnected" ? "outage" : scenario, state);
+    const check = snap.machines.flatMap((m) => m.services).flatMap((s) => s.checks).find((c) => c.id === id);
+    return check ? send(res, 200, fixtureStats(check)) : send(res, 404, { error: "Unknown check" });
+  }
   if (p === "/api/icons" && m === "GET") {
     const catalog = JSON.parse(await readFile(join(root, "icons/catalog.json"), "utf8"));
     return send(res, 200, { icons: [...catalog.icons, ...uploads] });

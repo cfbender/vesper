@@ -66,6 +66,9 @@ export function localTime(iso: string | null | undefined): string {
   return d.toDateString() === new Date().toDateString() ? timeFmt.format(d) : dateTimeFmt.format(d);
 }
 
+const dateFmt = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+export const localDate = (t: number) => dateFmt.format(t);
+
 export function fullTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -75,6 +78,19 @@ export function fullTime(iso: string | null | undefined): string {
 export function policySummary(p: CheckDefaults, kind: CheckKind): string {
   if (kind === "push") return `Stale after ${duration(p.stale_after_seconds)}`;
   return `Every ${duration(p.interval_seconds)} · ${p.failure_threshold} failures to Down · ${p.recovery_threshold} passes to recover`;
+}
+
+/** Uptime truncated, never rounded up, to two decimals: 99.999% shows 99.99%. */
+export function uptimeText(passes: number, failures: number): string {
+  const total = passes + failures;
+  if (total === 0) return "—";
+  if (failures === 0) return "100%";
+  return `${(Math.floor((passes * 10000) / total) / 100).toFixed(2).replace(/\.?0+$/, "")}%`;
+}
+
+export function latency(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return "—";
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
 }
 
 export function bytes(n: number): string {

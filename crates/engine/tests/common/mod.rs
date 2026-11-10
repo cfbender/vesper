@@ -86,7 +86,7 @@ impl Prober for FakeProber {
                 .unwrap_or(true);
             ProbeResult {
                 healthy,
-                latency_ms: 12,
+                latency_ms: if healthy { 12 } else { 5000 },
                 // Evidence must never reach Telegram.
                 message: if healthy {
                     "HTTP 200".into()

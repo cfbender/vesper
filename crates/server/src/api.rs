@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, io::Cursor};
 use tower_http::services::{ServeDir, ServeFile};
-use vesper_core::{config, Check, CheckKind, Config, Machine, Service, Snapshot};
+use vesper_core::{config, Check, CheckKind, CheckStats, Config, Machine, Service, Snapshot};
 
 pub struct ApiError(StatusCode, String);
 impl ApiError {
@@ -77,6 +77,10 @@ pub fn router(app: App) -> Router {
         .route("/api/services/{machine}/{service}", put(save_service))
         .route("/api/services/{machine}/{service}/recheck", post(recheck))
         .route("/api/services/{machine}/{service}/silence", post(silence))
+        .route(
+            "/api/checks/{machine}/{service}/{check}/stats",
+            get(check_stats),
+        )
         .route("/api/incidents/{id}/acknowledge", post(acknowledge))
         .route("/api/draft/test", post(test_draft))
         .route("/api/notifications/kinds", get(notification_kinds))
@@ -111,6 +115,25 @@ async fn csrf(State(app): State<App>) -> Json<Value> {
 }
 async fn snapshot(State(app): State<App>) -> ApiResult<Json<Snapshot>> {
     Ok(Json(app.engine.lock().await.snapshot()?))
+}
+async fn check_stats(
+    State(app): State<App>,
+    Path((machine, service, check)): Path<(String, String, String)>,
+) -> ApiResult<Json<CheckStats>> {
+    ids(&[&machine, &service, &check])?;
+    let engine = app.engine.lock().await;
+    let configured = engine
+        .config()
+        .machines
+        .get(&machine)
+        .and_then(|m| m.services.get(&service))
+        .is_some_and(|s| s.checks.contains_key(&check));
+    if !configured {
+        return Err(ApiError(StatusCode::NOT_FOUND, "Unknown check".into()));
+    }
+    Ok(Json(
+        engine.check_stats(&format!("{machine}/{service}/{check}"))?,
+    ))
 }
 async fn configuration(State(app): State<App>) -> Json<Value> {
     let loaded = app.loaded.lock().await;

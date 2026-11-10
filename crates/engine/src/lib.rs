@@ -23,8 +23,9 @@ use store::{fmt_time, CheckRow, State, Store};
 use tokio::sync::{Mutex, Notify};
 use vesper_core::config::LoadedConfig;
 use vesper_core::{
-    Check, CheckDefaults, CheckKind, CheckView, Config, Health, IncidentView, Machine, MachineView,
-    MaintenanceWindow, NetworkPolicy, ProbeResult, Sample, Service, ServiceView, Snapshot,
+    Check, CheckDefaults, CheckEvent, CheckKind, CheckStats, CheckView, Config, Health,
+    IncidentView, Machine, MachineView, MaintenanceWindow, NetworkPolicy, ProbeResult, Sample,
+    Service, ServiceView, Snapshot, StatsWindow,
 };
 
 pub use transport::{Network, NetworkTransport, NotifyTransport};
@@ -92,6 +93,7 @@ impl EngineOptions {
 /// dependency so the notification can be grouped with it.
 const DEPENDENCY_GROUPING_WAIT_SECONDS: i64 = 300;
 const HISTORY_SAMPLES: usize = 60;
+const CHECK_EVENTS_IN_STATS: usize = 50;
 const RESOLVED_INCIDENTS_IN_SNAPSHOT: usize = 100;
 const EVENTS_PER_INCIDENT: usize = 100;
 const LAST_ALIVE_EVERY_SECONDS: i64 = 15;
@@ -504,7 +506,8 @@ impl Engine {
             latency_ms: 0,
             message: rt.row.message.clone(),
         };
-        self.store.record_sample(check_id, &rt.row, &sample)?;
+        self.store
+            .record_sample(check_id, now, prev, &rt.row, &sample, None)?;
         let service_id = rt.service_id.clone();
         let new = rt.row.state;
         self.transition_event(&service_id, &name, prev, new, now)?;
@@ -925,6 +928,10 @@ impl Engine {
                 rt.row.message = format!("No heartbeat by deadline {}", fmt_time(deadline));
                 rt.current = true;
                 self.store.save_check(id, &rt.row)?;
+                if prev != State::Down {
+                    self.store
+                        .check_event(id, now, State::Down, &rt.row.message)?;
+                }
                 missed.push((
                     id.clone(),
                     rt.service_id.clone(),
@@ -1039,7 +1046,14 @@ impl Engine {
             latency_ms: result.latency_ms,
             message,
         };
-        self.store.record_sample(&job.check_id, &rt.row, &sample)?;
+        self.store.record_sample(
+            &job.check_id,
+            now,
+            prev,
+            &rt.row,
+            &sample,
+            result.healthy.then_some(result.latency_ms),
+        )?;
         let new = rt.row.state;
         let service_id = rt.service_id.clone();
         self.transition_event(&service_id, &name, prev, new, now)?;
@@ -1048,6 +1062,47 @@ impl Engine {
             self.wake.notify_one();
         }
         Ok(())
+    }
+
+    /// Uptime, response time and state changes of one configured check.
+    /// The last hour comes from raw samples; longer windows sum whole UTC
+    /// hours, the current one included, so they cover up to an hour less.
+    pub fn check_stats(&self, check_id: &str) -> Result<CheckStats> {
+        let now = self.clock.now();
+        let (_, check) =
+            find_check(&self.loaded.config, check_id).ok_or_else(|| anyhow!("check not found"))?;
+        let timed = check.kind != CheckKind::Push;
+        let mut windows = vec![StatsWindow {
+            seconds: 3600,
+            stats: self
+                .store
+                .sample_window(check_id, now - TimeDelta::hours(1), timed)?,
+        }];
+        for hours in [24, 7 * 24, 30 * 24, 365 * 24] {
+            windows.push(StatsWindow {
+                seconds: hours as u64 * 3600,
+                stats: self
+                    .store
+                    .hour_window(check_id, now - TimeDelta::hours(hours - 1))?,
+            });
+        }
+        let events = self
+            .store
+            .check_events(check_id, CHECK_EVENTS_IN_STATS)?
+            .into_iter()
+            .map(|(at, state, message)| CheckEvent {
+                at,
+                health: health_of(state),
+                message,
+            })
+            .collect();
+        Ok(CheckStats {
+            windows,
+            hours: self
+                .store
+                .hours(check_id, now - TimeDelta::hours(30 * 24 - 1))?,
+            events,
+        })
     }
 
     pub fn snapshot(&self) -> Result<Snapshot> {

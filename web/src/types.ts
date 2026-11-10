@@ -102,6 +102,41 @@ export interface CheckView {
   history: Sample[];
 }
 
+/** Sample counts over a period; latency covers passing samples of active checks only. */
+export interface SampleStats {
+  passes: number;
+  failures: number;
+  latency_avg_ms: number | null;
+  latency_min_ms: number | null;
+  latency_max_ms: number | null;
+}
+
+export interface StatsWindow extends SampleStats {
+  seconds: number;
+}
+
+export interface StatsHour extends SampleStats {
+  /** Start of the UTC hour. */
+  hour: string;
+}
+
+export interface CheckEvent {
+  at: string;
+  /** The state the check entered. */
+  health: Health;
+  message: string;
+}
+
+/** `GET /api/checks/:machine/:service/:check/stats` */
+export interface CheckStats {
+  /** Last hour, 24 hours, 7, 30 and 365 days. */
+  windows: StatsWindow[];
+  /** Hours with samples over the last 30 days, oldest first. */
+  hours: StatsHour[];
+  /** Newest first. */
+  events: CheckEvent[];
+}
+
 export interface ServiceView {
   id: string;
   name: string;

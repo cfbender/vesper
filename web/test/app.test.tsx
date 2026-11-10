@@ -170,6 +170,45 @@ describe("overview", () => {
   });
 });
 
+describe("service page", () => {
+  it("shows a check's uptime windows, response summary and how long each state lasted", async () => {
+    const now = Date.parse(snapshot.generated_at);
+    const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+    const w = (seconds: number, passes: number, failures: number) => ({
+      seconds,
+      passes,
+      failures,
+      latency_avg_ms: 42.6,
+      latency_min_ms: 12,
+      latency_max_ms: 1840,
+    });
+    routes["GET /api/checks/jelly/sonarr/web/stats"] = () =>
+      json(200, {
+        windows: [w(3600, 120, 0), w(86400, 2867, 13), w(604800, 0, 0), w(2592000, 99999, 1), w(31536000, 99999, 1)],
+        hours: [],
+        events: [
+          { at: at(4), health: "down", message: "Connection timed out after 5s" },
+          { at: at(6.5), health: "suspect", message: "Connection timed out after 5s" },
+          { at: at(600), health: "healthy", message: "HTTP 200" },
+        ],
+      });
+    renderAt("/services/jelly/sonarr");
+    const card = (await screen.findByRole("heading", { name: /^Web/ })).closest("section")!;
+    const tile = (label: string) => within(card).getByText(label, { selector: "dt" }).closest("div")!;
+    await waitFor(() => expect(tile("24 hours")).toHaveTextContent("99.54%"));
+    expect(tile("24 hours")).toHaveTextContent("13 of 2,880 failed");
+    expect(tile("30 days")).toHaveTextContent("99.99%");
+    expect(tile("Last hour")).toHaveTextContent("100%");
+    expect(tile("7 days")).toHaveTextContent("—");
+    expect(tile("Avg response · 24h")).toHaveTextContent("43 ms");
+    expect(tile("Response range · 24h")).toHaveTextContent("12 ms – 1.8 s");
+    const events = within(card).getAllByRole("listitem");
+    expect(events[0]).toHaveTextContent(/Down.*for 4m( \d+s)? so far/);
+    expect(events[1]).toHaveTextContent(/Suspect.*for 2m 30s/);
+    expect(events[2]).toHaveTextContent(/Healthy.*for 9h 53m/);
+  });
+});
+
 describe("service editor", () => {
   it("saves only the edited field and preserves advanced configuration", async () => {
     const user = userEvent.setup();

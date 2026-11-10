@@ -2,13 +2,16 @@
 //! awareness, notification channel state, silences and audit events.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, DurationRound, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::BTreeMap;
 use std::path::Path;
-use vesper_core::{IncidentEvent, Sample};
+use vesper_core::{IncidentEvent, Sample, SampleStats, StatsHour};
 
 const SAMPLES_KEPT_PER_CHECK: i64 = 500;
+const EVENTS_KEPT_PER_CHECK: i64 = 200;
+/// Hourly rollups outlive raw samples so uptime covers a full year.
+const HOURS_KEPT_PER_CHECK: i64 = 400 * 24;
 
 pub(crate) fn fmt_time(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -22,6 +25,31 @@ pub(crate) fn parse_time(s: &str) -> Option<DateTime<Utc>> {
 
 fn opt_time(s: Option<String>) -> Option<DateTime<Utc>> {
     s.as_deref().and_then(parse_time)
+}
+
+/// Start of the UTC hour containing `t`.
+pub(crate) fn hour_start(t: DateTime<Utc>) -> DateTime<Utc> {
+    t.duration_trunc(Duration::hours(1)).unwrap_or(t)
+}
+
+/// Reads `passes, failures, latency_count, latency_sum, latency_min, latency_max`.
+fn stats_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SampleStats> {
+    let n = |i| {
+        r.get::<_, Option<i64>>(i)
+            .map(|v| v.unwrap_or(0).max(0) as u64)
+    };
+    let opt = |i| {
+        r.get::<_, Option<i64>>(i)
+            .map(|v| v.map(|v| v.max(0) as u64))
+    };
+    let (count, sum) = (n(2)?, n(3)?);
+    Ok(SampleStats {
+        passes: n(0)?,
+        failures: n(1)?,
+        latency_avg_ms: (count > 0).then(|| sum as f64 / count as f64),
+        latency_min_ms: opt(4)?,
+        latency_max_ms: opt(5)?,
+    })
 }
 
 /// Threshold state machine position of one check.
@@ -141,7 +169,7 @@ impl Store {
         let version: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 1 {
+        if version > 2 {
             anyhow::bail!("database schema is newer than this Vesper version");
         }
         if version < 1 {
@@ -214,6 +242,41 @@ impl Store {
                 COMMIT;",
             )?;
         }
+        if version < 2 {
+            // Hourly rollups start from the samples still retained; heartbeat
+            // samples carry no latency.
+            self.conn.execute_batch(
+                "BEGIN;
+                CREATE TABLE IF NOT EXISTS sample_hours (
+                    check_id TEXT NOT NULL,
+                    hour TEXT NOT NULL,
+                    passes INTEGER NOT NULL,
+                    failures INTEGER NOT NULL,
+                    latency_count INTEGER NOT NULL,
+                    latency_sum INTEGER NOT NULL,
+                    latency_min INTEGER,
+                    latency_max INTEGER,
+                    PRIMARY KEY (check_id, hour)
+                );
+                INSERT OR IGNORE INTO sample_hours
+                SELECT check_id, substr(at, 1, 13) || ':00:00.000Z',
+                    SUM(healthy), SUM(1 - healthy),
+                    SUM(timed), SUM(CASE WHEN timed THEN latency_ms ELSE 0 END),
+                    MIN(CASE WHEN timed THEN latency_ms END), MAX(CASE WHEN timed THEN latency_ms END)
+                FROM (SELECT *, healthy AND message <> 'Healthy heartbeat received' AS timed FROM samples)
+                GROUP BY 1, 2;
+                CREATE TABLE IF NOT EXISTS check_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    check_id TEXT NOT NULL,
+                    at TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    message TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS check_events_check ON check_events (check_id, id);
+                PRAGMA user_version = 2;
+                COMMIT;",
+            )?;
+        }
         Ok(())
     }
 
@@ -282,8 +345,18 @@ impl Store {
         Ok(())
     }
 
-    /// Persists a sample and the resulting check state atomically.
-    pub fn record_sample(&self, id: &str, row: &CheckRow, sample: &Sample) -> Result<()> {
+    /// Persists a sample, its hourly rollup, the resulting check state and,
+    /// when the state changed from `prev`, a check event, atomically.
+    /// `latency` is the response time to chart, if the sample has one.
+    pub fn record_sample(
+        &self,
+        id: &str,
+        at: DateTime<Utc>,
+        prev: State,
+        row: &CheckRow,
+        sample: &Sample,
+        latency: Option<u64>,
+    ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
             "INSERT INTO samples (check_id, at, healthy, latency_ms, message) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -294,9 +367,106 @@ impl Store {
                SELECT id FROM samples WHERE check_id = ?1 ORDER BY id DESC LIMIT 1 OFFSET ?2)",
             params![id, SAMPLES_KEPT_PER_CHECK],
         )?;
+        let latency = latency.map(|v| v as i64);
+        tx.execute(
+            "INSERT INTO sample_hours (check_id, hour, passes, failures, latency_count, latency_sum, latency_min, latency_max)
+             VALUES (?1, ?2, ?3, 1 - ?3, ?4 IS NOT NULL, coalesce(?4, 0), ?4, ?4)
+             ON CONFLICT (check_id, hour) DO UPDATE SET
+               passes = passes + excluded.passes, failures = failures + excluded.failures,
+               latency_count = latency_count + excluded.latency_count,
+               latency_sum = latency_sum + excluded.latency_sum,
+               latency_min = min(coalesce(latency_min, excluded.latency_min), coalesce(excluded.latency_min, latency_min)),
+               latency_max = max(coalesce(latency_max, excluded.latency_max), coalesce(excluded.latency_max, latency_max))",
+            params![id, fmt_time(hour_start(at)), sample.healthy, latency],
+        )?;
+        tx.execute(
+            "DELETE FROM sample_hours WHERE check_id = ?1 AND hour < ?2",
+            params![
+                id,
+                fmt_time(hour_start(at) - Duration::hours(HOURS_KEPT_PER_CHECK))
+            ],
+        )?;
+        if prev != row.state {
+            self.check_event(id, at, row.state, &sample.message)?;
+        }
         self.save_check(id, row)?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Records that a check entered `state`.
+    pub fn check_event(
+        &self,
+        id: &str,
+        at: DateTime<Utc>,
+        state: State,
+        message: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO check_events (check_id, at, state, message) VALUES (?1, ?2, ?3, ?4)",
+            params![id, fmt_time(at), state.as_str(), message],
+        )?;
+        self.conn.execute(
+            "DELETE FROM check_events WHERE check_id = ?1 AND id <= (
+               SELECT id FROM check_events WHERE check_id = ?1 ORDER BY id DESC LIMIT 1 OFFSET ?2)",
+            params![id, EVENTS_KEPT_PER_CHECK],
+        )?;
+        Ok(())
+    }
+
+    /// Passes, failures and, when `timed`, passing latency over raw samples
+    /// since `since`.
+    pub fn sample_window(
+        &self,
+        id: &str,
+        since: DateTime<Utc>,
+        timed: bool,
+    ) -> Result<SampleStats> {
+        Ok(self.conn.query_row(
+            "SELECT SUM(healthy), SUM(1 - healthy), SUM(timed),
+                SUM(CASE WHEN timed THEN latency_ms ELSE 0 END),
+                MIN(CASE WHEN timed THEN latency_ms END), MAX(CASE WHEN timed THEN latency_ms END)
+             FROM (SELECT *, healthy AND ?3 AS timed FROM samples WHERE check_id = ?1 AND at >= ?2)",
+            params![id, fmt_time(since), timed],
+            stats_from_row,
+        )?)
+    }
+
+    /// Hourly rollups summed from the hour containing `since`.
+    pub fn hour_window(&self, id: &str, since: DateTime<Utc>) -> Result<SampleStats> {
+        Ok(self.conn.query_row(
+            "SELECT SUM(passes), SUM(failures), SUM(latency_count), SUM(latency_sum),
+                MIN(latency_min), MAX(latency_max)
+             FROM sample_hours WHERE check_id = ?1 AND hour >= ?2",
+            params![id, fmt_time(hour_start(since))],
+            stats_from_row,
+        )?)
+    }
+
+    /// Hourly rollups from the hour containing `since`, oldest first.
+    pub fn hours(&self, id: &str, since: DateTime<Utc>) -> Result<Vec<StatsHour>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT passes, failures, latency_count, latency_sum, latency_min, latency_max, hour
+             FROM sample_hours WHERE check_id = ?1 AND hour >= ?2 ORDER BY hour",
+        )?;
+        let rows = stmt.query_map(params![id, fmt_time(hour_start(since))], |r| {
+            Ok(StatsHour {
+                hour: r.get(6)?,
+                stats: stats_from_row(r)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Most recent check state changes, newest first.
+    pub fn check_events(&self, id: &str, limit: usize) -> Result<Vec<(String, State, String)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT at, state, message FROM check_events WHERE check_id = ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![id, limit as i64], |r| {
+            Ok((r.get(0)?, State::parse(&r.get::<_, String>(1)?), r.get(2)?))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Most recent samples, oldest first.

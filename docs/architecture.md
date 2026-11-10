@@ -36,6 +36,7 @@ All JSON errors are `{ "error": "safe explanation" }`. API success responses use
 - `PUT /api/services/:machine/:service` body `{revision, service: Service}` saves YAML.
 - `PUT /api/machines/:machine` body `{revision, machine: Machine}` saves YAML.
 - `POST /api/draft/test` body `{checks: {id: Check}}` returns `{results: {id: ProbeResult}}`. Enforces saved file-controlled network policy; never incident processing or notifications.
+- `GET /api/checks/:machine/:service/:check/stats` returns `CheckStats`: `windows` (passes, failures and passing-sample latency avg/min/max for the last hour from raw samples, then 24 hours, 7, 30 and 365 days summed from whole UTC hours), `hours` (hourly rollups for the last 30 days) and `events` (the check's state changes, newest first). Push checks report no latency. SQLite keeps the latest 500 raw samples, 400 days of hourly rollups and 200 state changes per check.
 - `POST /api/services/:machine/:service/recheck` queues active checks.
 - `POST /api/services/:machine/:service/silence` body `{until: RFC3339 | null}`.
 - `POST /api/incidents/:id/acknowledge` body `{acknowledged: boolean}`.

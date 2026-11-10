@@ -3,6 +3,7 @@
 import type {
   NotificationKind,
   Check,
+  CheckStats,
   CheckView,
   ConfigResponse,
   Health,
@@ -279,6 +280,89 @@ export function fixtureSnapshot(
       { id: "telegram", kind: "telegram", kind_name: "Telegram", status: `ok; last message accepted ${iso(now - 3600_000)}` },
       { id: "ops", kind: "discord", kind_name: "Discord", status: "configured" },
     ],
+  };
+}
+
+const HOUR = 3600_000;
+
+/** Deterministic 30 days of hourly rollups and state changes shaped by the check's current state. */
+export function fixtureStats(check: CheckView, now = Date.now()): CheckStats {
+  const push = check.kind === "push";
+  const perHour = push ? 0 : Math.round(3600 / check.policy.interval_seconds);
+  const seed = [...check.id].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+  const rand = (i: number) => {
+    const x = Math.sin(seed + i * 12.9898) * 43758.5453;
+    return x - Math.floor(x);
+  };
+  const base = 20 + (seed % 40);
+  const current = Math.floor(now / HOUR) * HOUR;
+  const hours: CheckStats["hours"] = [];
+  const events: CheckStats["events"] = [];
+  const down = check.health === "down";
+  for (let i = 30 * 24 - 1; i >= 0; i--) {
+    const t = current - i * HOUR;
+    if (push) {
+      if (i % 24 === 3) hours.push({ hour: iso(t), passes: 1, failures: 0, latency_avg_ms: null, latency_min_ms: null, latency_max_ms: null });
+      continue;
+    }
+    if (check.health === "paused" || (i > 21 * 24 && seed % 3 === 0)) continue; // added nine days ago
+    // Two short blips over the month, plus the current outage.
+    const blip = i === 200 + (seed % 90) || i === 520 + (seed % 70);
+    const failures = down && i === 0 ? perHour : blip ? 2 : 0;
+    const passes = perHour - failures;
+    const wave = Math.sin((t / HOUR / 24) * Math.PI * 2) * base * 0.25;
+    const avg = Math.max(2, base + wave + rand(i) * base * 0.4 + (i % 168 === 50 ? base * 1.5 : 0));
+    hours.push({
+      hour: iso(t),
+      passes,
+      failures,
+      latency_avg_ms: passes ? avg : null,
+      latency_min_ms: passes ? Math.round(avg * 0.6) : null,
+      latency_max_ms: passes ? Math.round(avg * (1.5 + rand(i + 1))) : null,
+    });
+    if (blip) {
+      events.unshift(
+        { at: iso(t + 600_000), health: "suspect", message: "Connection timed out after 5s" },
+        { at: iso(t + 630_000), health: "healthy", message: check.kind === "tcp" ? "TCP connect succeeded" : "HTTP 200" },
+      );
+    }
+  }
+  if (down)
+    events.unshift(
+      { at: iso(now - 6 * 60_000 - 60_000), health: "suspect", message: check.message },
+      { at: iso(now - 6 * 60_000), health: "down", message: check.message },
+    );
+  if (check.health === "suspect") events.unshift({ at: iso(now - 20_000), health: "suspect", message: "Connection timed out after 5s" });
+  events.sort((a, b) => b.at.localeCompare(a.at));
+  events.push({ at: hours[0]?.hour ?? iso(now), health: "healthy", message: push ? "Healthy heartbeat received" : "HTTP 200" });
+  const sum = (since: number) => {
+    const hs = hours.filter((h) => Date.parse(h.hour) >= since);
+    const timed = hs.filter((h) => h.latency_avg_ms !== null);
+    const passes = timed.reduce((a, h) => a + h.passes, 0);
+    return {
+      passes: hs.reduce((a, h) => a + h.passes, 0),
+      failures: hs.reduce((a, h) => a + h.failures, 0),
+      latency_avg_ms: passes ? timed.reduce((a, h) => a + h.latency_avg_ms! * h.passes, 0) / passes : null,
+      latency_min_ms: timed.length ? Math.min(...timed.map((h) => h.latency_min_ms!)) : null,
+      latency_max_ms: timed.length ? Math.max(...timed.map((h) => h.latency_max_ms!)) : null,
+    };
+  };
+  const recent = check.history.filter((h) => Date.parse(h.at) >= now - HOUR);
+  const passing = recent.filter((h) => h.healthy && !push).map((h) => h.latency_ms);
+  return {
+    windows: [
+      {
+        seconds: 3600,
+        passes: recent.filter((h) => h.healthy).length,
+        failures: recent.filter((h) => !h.healthy).length,
+        latency_avg_ms: passing.length ? passing.reduce((a, b) => a + b, 0) / passing.length : null,
+        latency_min_ms: passing.length ? Math.min(...passing) : null,
+        latency_max_ms: passing.length ? Math.max(...passing) : null,
+      },
+      ...[24, 7 * 24, 30 * 24, 365 * 24].map((h) => ({ seconds: h * 3600, ...sum(current - (h - 1) * HOUR) })),
+    ],
+    hours,
+    events,
   };
 }
 

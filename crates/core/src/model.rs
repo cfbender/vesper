@@ -280,6 +280,52 @@ pub struct Sample {
     pub message: String,
 }
 
+/// Uptime, response time and state changes for one check's detail view.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckStats {
+    /// Last hour (from raw samples), 24 hours, 7, 30 and 365 days.
+    pub windows: Vec<StatsWindow>,
+    /// Hours with samples over the last 30 days, oldest first.
+    pub hours: Vec<StatsHour>,
+    /// Check state changes, newest first.
+    pub events: Vec<CheckEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StatsWindow {
+    pub seconds: u64,
+    #[serde(flatten)]
+    pub stats: SampleStats,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StatsHour {
+    /// Start of the UTC hour.
+    pub hour: String,
+    #[serde(flatten)]
+    pub stats: SampleStats,
+}
+
+/// Sample counts over a period. Latency covers passing samples of active
+/// checks only; push heartbeats have none.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct SampleStats {
+    pub passes: u64,
+    pub failures: u64,
+    pub latency_avg_ms: Option<f64>,
+    pub latency_min_ms: Option<u64>,
+    pub latency_max_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CheckEvent {
+    pub at: String,
+    /// The state the check entered.
+    pub health: Health,
+    /// Evidence of the sample that caused the change.
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceView {
     pub id: String,

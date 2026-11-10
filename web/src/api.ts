@@ -1,5 +1,6 @@
 import type {
   Check,
+  CheckStats,
   ConfigResponse,
   IconEntry,
   Machine,
@@ -101,6 +102,9 @@ const seg = encodeURIComponent;
 export const api = {
   snapshot: () => request<Snapshot>("GET", "/api/snapshot"),
   config: () => request<ConfigResponse>("GET", "/api/config"),
+  /** `checkId` is the full `machine/service/check` ID. */
+  checkStats: (checkId: string) =>
+    request<CheckStats>("GET", `/api/checks/${checkId.split("/").map(seg).join("/")}/stats`),
   icons: () => request<{ icons: IconEntry[] }>("GET", "/api/icons"),
   reloadConfig: () => mutate<Record<string, unknown>>("POST", "/api/config/reload"),
   saveService: (machine: string, service: string, revision: string, body: Service) =>

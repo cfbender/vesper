@@ -4,7 +4,7 @@ A status monitor for your homelab. You describe machines and services in YAML; V
 
 ![Vesper overview: four machines with their services, Sonarr down, MinIO paused, Paperless-ngx in maintenance](.github/readme/overview-desktop.png)
 
-Each machine is a full-width row of service tiles. Open a service to see each check's latest evidence, its policy and recent samples. From there you can recheck, silence or edit it.
+Each machine is a full-width row of service tiles. Open a service to see each check's latest evidence, uptime over the last hour, day, week, month and year, a response-time chart, daily uptime, state-change events, its policy and recent samples. From there you can recheck, silence or edit it.
 
 <table>
   <tr>
