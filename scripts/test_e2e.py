@@ -33,8 +33,11 @@ def await_value(read, predicate, description, timeout=12):
 
 class Endpoint(http.server.BaseHTTPRequestHandler):
     status = 200
+    credentials = []
 
     def do_GET(self):
+        if self.headers.get("Authorization"):
+            type(self).credentials.append(self.headers["Authorization"])
         self.send_response(type(self).status)
         self.end_headers()
         self.wfile.write(b"fixture ready")
@@ -216,6 +219,61 @@ def main():
             exported = subprocess.run([str(binary), "export"], env=env, check=True, capture_output=True, text=True).stdout
             assert token not in exported and 'file: push' in exported
             print("Restart retained history/incidents; read-only rejected writes but allowed tests and secret-reference export")
+
+            stop()
+            # Discovery can reference a credential only after the operator grants
+            # it. A restart that revokes that grant must not probe even once.
+            config_file.write_text(json.dumps({"network": configuration["network"]}))
+            machine_dir = root / "config/machines/home"
+            machine_dir.mkdir(parents=True)
+            (machine_dir / "_index.yaml").write_text("name: Home\n")
+            (root / "secrets/central-secret").write_text(token)
+
+            class DockerEndpoint(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):
+                    assert self.path == "/containers/json?all=true"
+                    body = json.dumps([{"Id": "fixture", "Names": ["/fixture"], "Labels": {
+                        "vesper.discovered.checks.web.url": f"http://{private_ip}:{endpoint.server_port}/",
+                        "vesper.discovered.checks.web.headers.Authorization.file": "central-secret",
+                    }}]).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *_):
+                    pass
+
+            docker = http.server.ThreadingHTTPServer(("127.0.0.1", 0), DockerEndpoint)
+            threading.Thread(target=docker.serve_forever, daemon=True).start()
+            env["VESPER_DISCOVER_DOCKER"] = f"home=tcp://127.0.0.1:{docker.server_port}"
+            env["VESPER_DISCOVER_ALLOWED_SECRETS"] = "{}"
+            try:
+                rejected = subprocess.run([str(binary), "discover"], env=env, capture_output=True, text=True)
+                assert rejected.returncode != 0 and "not granted" in rejected.stderr
+                generated = machine_dir / "services/discovered.yaml"
+                assert not generated.exists()
+                env["VESPER_DISCOVER_ALLOWED_SECRETS"] = json.dumps({"home": [{"file": "central-secret"}]})
+                subprocess.run([str(binary), "discover"], env=env, check=True, capture_output=True)
+                assert generated.exists()
+                start()
+                await_value(lambda: Endpoint.credentials, lambda v: token in v, "explicitly granted HTTP credential")
+                stop()
+                Endpoint.credentials.clear()
+                env["VESPER_DISCOVER_ALLOWED_SECRETS"] = "{}"
+                # Revocation must work even when the Docker API disappears.
+                docker.shutdown()
+                docker.server_close()
+                start()
+                assert service("discovered")["paused"] is True
+                assert not Endpoint.credentials, "revoked credential sent during startup"
+                time.sleep(1)
+                assert not Endpoint.credentials, "revoked credential sent after startup"
+                print("Discovery denied ungranted credentials, used an explicit grant, and revoked it before startup probes")
+            finally:
+                stop()
+                docker.shutdown()
+                docker.server_close()
             print("PASS: real server + scheduler + HTTP fixture + SQLite end-to-end checks")
         finally:
             stop()

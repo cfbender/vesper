@@ -95,6 +95,10 @@ Before anything is written, the edited tree is assembled in memory and must equa
 
 `save_machine` on an existing machine changes only machine fields. `machine.services` must be empty or identical to the current services. A new machine may include its services.
 
+## Whole-file edits
+
+`edit_files` lets a tool that owns entire files, such as [Docker label discovery](../../docs/discovery.md), write or delete `.yaml` files under the same lock as the save functions. Its planner sees the current configuration and file texts and states the configuration its changes must produce; nothing is written unless the edited tree meets the loader's size, entry-count and directory-depth limits and assembles and validates to exactly that. Missing parent directories are created, and the same conflict detection applies. A dry run verifies the same limits without writing. UI saves enforce these limits too.
+
 ## Known limitations
 
 - **Concurrent external edits.** Vesper's own readers and writers serialize on an `flock` of the root. A save re-reads the whole tree after staging its files and before renaming them into place, and aborts with `Conflict` if any file changed, including files it does not touch. A non-cooperating editor that writes between that re-read and the renames, a window of microseconds, can still be overwritten.

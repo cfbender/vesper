@@ -17,6 +17,7 @@ tokio.workspace = true
 vesper-core.workspace = true
 vesper-probe.workspace = true
 vesper-engine.workspace = true
+vesper-discover.workspace = true
 axum = { version = "0.8", features = ["multipart"] }
 tower-http = { version = "0.6", features = ["fs", "set-header"] }
 ipnet = "2"

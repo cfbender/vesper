@@ -96,7 +96,7 @@ Active checks are a server-side request feature, so they are constrained:
 | Capabilities | `cap_drop: [ALL]`, `no-new-privileges:true` |
 | Resources | `pids_limit: 256`, `mem_limit: 512m`, rotated JSON logs |
 | Process | `tini` as PID 1, forwarding signals; `vesper healthcheck` for the Docker health check |
-| Docker socket | Never mounted. Vesper runs no shell or remote commands |
+| Docker socket | Not mounted by default. Optional [label discovery](discovery.md) mounts it, which is root-equivalent on the host (see below). Vesper runs no shell or remote commands |
 | Image | Multi-stage build; the runtime holds the `vesper` binary, the web assets, CA certificates and `tini` only |
 
 `deploy/smoke-test.sh` asserts these settings at runtime: UID, `CapEff`, `NoNewPrivs`, read-only root and config, and no port bindings.
@@ -104,6 +104,8 @@ Active checks are a server-side request feature, so they are constrained:
 ## Producers and the watchdog
 
 - **Docker:** the producer reads container state through the local Docker socket. Membership in the `docker` group is root-equivalent, so the script is root-owned and runs from a hardened systemd unit as a dedicated user. It receives its token through `LoadCredential`, and its only network action is an outbound HTTPS POST.
+- **Label discovery (optional):** with `VESPER_DISCOVER_DOCKER` set, the Vesper process itself lists containers (`GET /containers/json` only) and writes only the generated service files it owns. A mounted local socket gives that process full Docker control, which is root-equivalent on the host: a compromise of Vesper becomes a compromise of the host. No route or UI control reaches Docker. Remote hosts, or the local host for tighter isolation, can expose a socket proxy that allows only the container list. Anyone who can set container labels on a discovered host can add checks, which still obey `network.allowed_cidrs` and accept only secret references. See [discovery.md](discovery.md).
+- **Discovery credentials:** label references are denied unless explicitly granted to their machine through `VESPER_DISCOVER_ALLOWED_SECRETS` in Vesper's deployment environment. A grant lets every label writer on that machine disclose that credential to any allowed HTTP target; use dedicated credentials, never unrelated central secrets. File and environment references are distinct grants. On restart with discovery still enabled for that source, revoked grants pause affected still-managed services before probes start, even if Docker is unavailable. Detached/manual YAML is administrator-owned and must be revoked manually. Removing a source or disabling discovery leaves its YAML active; neither revokes credentials. See [grant and revocation examples](discovery.md#granting-secrets-to-a-machine).
 - **Proxmox:** a privilege-separated API token with only the read-only `PVEAuditor` role, running under `DynamicUser=yes`. No root, SSH or `pvesh`.
 - **Watchdog:** it posts Vesper's own watchdog heartbeat and reports to Uptime Kuma. Kuma's push API carries its token in the URL by design. The URL lives in a root-only credential file and is passed to curl on stdin.
 

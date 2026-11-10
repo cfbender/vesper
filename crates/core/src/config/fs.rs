@@ -53,6 +53,30 @@ fn split(path: &str) -> (&str, &str) {
 }
 
 impl Tree {
+    /// Enforce the same bounds on planned trees as on filesystem reads.
+    pub fn check_bounds(&self) -> Result<()> {
+        if self.files.len() + self.dirs.iter().filter(|d| !d.is_empty()).count() > MAX_ENTRIES {
+            bail!("configuration has more than {MAX_ENTRIES} entries");
+        }
+        for dir in self.dirs.iter().filter(|d| !d.is_empty()) {
+            if dir.split('/').count() > MAX_DIR_DEPTH {
+                bail!("{dir}: directories nest deeper than {MAX_DIR_DEPTH} levels");
+            }
+        }
+        let mut total = 0u64;
+        for (path, content) in &self.files {
+            let size = content.len() as u64;
+            if size > MAX_FILE_BYTES {
+                bail!("{path}: larger than {MAX_FILE_BYTES} bytes");
+            }
+            total += size;
+            if total > MAX_TOTAL_BYTES {
+                bail!("configuration exceeds {MAX_TOTAL_BYTES} bytes in total");
+            }
+        }
+        Ok(())
+    }
+
     /// Immediate children of `dir`: (name, is_dir).
     pub fn children(&self, dir: &str) -> Vec<(String, bool)> {
         let mut out = Vec::new();

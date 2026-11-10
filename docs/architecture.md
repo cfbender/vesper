@@ -4,7 +4,7 @@ Vesper is one Rust/Axum process serving a bundled React/TypeScript application. 
 
 ## Crates and ownership
 
-`vesper-core` owns models, YAML assembly, validation, source provenance, safe atomic edits and secret resolution. `vesper-probe` executes bounded HTTP and TCP checks with network-policy enforcement. `vesper-engine` owns scheduling, state transitions, persistence and Telegram. `vesper-server` owns HTTP APIs, CSRF/origin protection, uploads and static files. `web` owns the React interface. Public models live in `crates/core/src/model.rs`.
+`vesper-core` owns models, YAML assembly, validation, source provenance, safe atomic edits and secret resolution. `vesper-probe` executes bounded HTTP and TCP checks with network-policy enforcement. `vesper-engine` owns scheduling, state transitions, persistence and Telegram. `vesper-server` owns HTTP APIs, CSRF/origin protection, uploads and static files. `vesper-discover` owns opt-in Docker label discovery, which `vesper serve` runs as a background task when `VESPER_DISCOVER_DOCKER` is set (and `vesper discover` runs once); it writes generated service files through `config::edit_files`, never through the engine; see [discovery.md](discovery.md). `web` owns the React interface. Public models live in `crates/core/src/model.rs`.
 
 Machine, service and check IDs are path segments restricted to ASCII letters, digits, hyphens and underscores. Full service IDs are `machine/service`; full check IDs are `machine/service/check`. Sorting uses these stable IDs, not current health. Dates in APIs are RFC3339 UTC; the browser displays local time. Secret values never enter API responses or configuration exports.
 

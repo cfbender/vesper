@@ -2100,6 +2100,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "vesper-discover"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chrono",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2 0.11.1",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "vesper-core",
+]
+
+[[package]]
 name = "vesper-engine"
 version = "0.1.0"
 dependencies = [
@@ -2160,6 +2180,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "vesper-core",
+ "vesper-discover",
  "vesper-engine",
  "vesper-probe",
 ]

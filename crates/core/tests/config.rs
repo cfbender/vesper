@@ -953,3 +953,151 @@ fn probe_controlled_settings_are_validated() {
         assert!(err(d.path()).contains("cannot be set"), "{h}");
     }
 }
+
+#[test]
+fn edit_files_writes_only_changes_that_produce_the_planned_config() {
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path();
+    write(r, "machines/m/_index.yaml", "name: M\n");
+    let before = snapshot(r);
+    let web = |planned: &config::LoadedConfig, name: &str| {
+        let mut next = planned.config.clone();
+        next.machines.get_mut("m").unwrap().services.insert(
+            "web".into(),
+            Service {
+                name: name.into(),
+                ..Service::default()
+            },
+        );
+        next
+    };
+    let change = vec![config::FileChange::Write {
+        path: "machines/m/services/web.yaml".into(),
+        content: "# generated\nname: Web\n".into(),
+    }];
+
+    // A plan whose files would not produce its stated configuration, an
+    // unsafe path, and a dry run all leave the directory untouched.
+    let e = config::edit_files(r, false, |l, _| Ok((change.clone(), web(l, "Other")))).unwrap_err();
+    assert!(e
+        .to_string()
+        .contains("do not produce the planned configuration"));
+    for path in [
+        "machines/../x.yaml",
+        "machines/m/.hidden.yaml",
+        "machines/m/web.txt",
+    ] {
+        let bad = vec![config::FileChange::Write {
+            path: path.into(),
+            content: String::new(),
+        }];
+        assert!(config::edit_files(r, false, |l, _| Ok((bad, l.config.clone()))).is_err());
+    }
+    let dry = config::edit_files(r, true, |l, _| Ok((change.clone(), web(l, "Web")))).unwrap();
+    assert_eq!(dry.config.machines["m"].services["web"].name, "Web");
+    assert_eq!(snapshot(r), before);
+
+    let saved = config::edit_files(r, false, |l, _| Ok((change.clone(), web(l, "Web")))).unwrap();
+    assert_eq!(
+        read(r, "machines/m/services/web.yaml"),
+        "# generated\nname: Web\n"
+    );
+    assert_eq!(saved, config::load(r).unwrap());
+    config::edit_files(r, false, |l, files| {
+        assert!(files.contains_key("machines/m/services/web.yaml"));
+        let mut next = l.config.clone();
+        next.machines.get_mut("m").unwrap().services.clear();
+        Ok((
+            vec![config::FileChange::Delete {
+                path: "machines/m/services/web.yaml".into(),
+            }],
+            next,
+        ))
+    })
+    .unwrap();
+    assert!(config::load(r).unwrap().config.machines["m"]
+        .services
+        .is_empty());
+}
+
+#[test]
+fn whole_file_edits_reject_oversized_files_before_writing_even_in_dry_runs() {
+    let d = tempfile::tempdir().unwrap();
+    write(d.path(), "_index.yaml", "{}\n");
+    let before = snapshot(d.path());
+    for dry_run in [true, false] {
+        let error = config::edit_files(d.path(), dry_run, |loaded, _| {
+            Ok((
+                vec![config::FileChange::Write {
+                    path: "_index.yaml".into(),
+                    content: format!("# {}\n{{}}\n", "x".repeat(1024 * 1024)),
+                }],
+                loaded.config.clone(),
+            ))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("larger than 1048576 bytes"));
+        assert_eq!(snapshot(d.path()), before);
+        config::load(d.path()).unwrap();
+    }
+    // Exactly the limit is still readable, not conservatively rejected.
+    let content = format!("# {}\n{{}}\n", "x".repeat(1024 * 1024 - 6));
+    assert_eq!(content.len(), 1024 * 1024);
+    config::edit_files(d.path(), false, |loaded, _| {
+        Ok((
+            vec![config::FileChange::Write {
+                path: "_index.yaml".into(),
+                content,
+            }],
+            loaded.config.clone(),
+        ))
+    })
+    .unwrap();
+    config::load(d.path()).unwrap();
+}
+
+#[test]
+fn whole_file_edits_enforce_tree_limits_before_creating_directories() {
+    let d = tempfile::tempdir().unwrap();
+    write(d.path(), "_index.yaml", "{}\n");
+    let before = snapshot(d.path());
+    let cases = [
+        (
+            (0..16)
+                .map(|i| config::FileChange::Write {
+                    path: format!("machines/m{i}.yaml"),
+                    content: format!("# {}\n", "x".repeat(1024 * 1024 - 3)),
+                })
+                .collect::<Vec<_>>(),
+            "exceeds 16777216 bytes in total",
+        ),
+        (
+            (0..10_000)
+                .map(|i| config::FileChange::Write {
+                    path: format!("machines/m{i}.yaml"),
+                    content: "{}\n".into(),
+                })
+                .collect(),
+            "more than 10000 entries",
+        ),
+        (
+            vec![config::FileChange::Write {
+                path: "a/b/c/d/e/f/g/_index.yaml".into(),
+                content: "{}\n".into(),
+            }],
+            "directories nest deeper than 6 levels",
+        ),
+    ];
+    for (changes, message) in cases {
+        for dry_run in [true, false] {
+            let e = config::edit_files(d.path(), dry_run, |l, _| {
+                Ok((changes.clone(), l.config.clone()))
+            })
+            .unwrap_err();
+            assert!(e.to_string().contains(message), "{e:#}");
+            assert_eq!(snapshot(d.path()), before);
+            assert!(!d.path().join("machines").exists());
+            assert!(!d.path().join("a").exists());
+        }
+    }
+}

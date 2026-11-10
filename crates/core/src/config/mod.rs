@@ -14,6 +14,7 @@ use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+pub use assemble::sanitize_serde;
 pub use validate::validate;
 
 /// Maximum length of a machine, service or check ID, in bytes.
@@ -189,6 +190,7 @@ fn save_with(
         // into exactly the requested configuration.
         let mut edited = tree.clone();
         edited.apply(&ops);
+        edited.check_bounds()?;
         match assemble::assemble(&edited) {
             Ok((_, check)) if check == next => {}
             _ => {
@@ -201,6 +203,90 @@ fn save_with(
         }
         root.commit(&tree, &ops)?;
     }
+    loaded(&root.scan()?)
+}
+
+/// A whole-file change planned for [`edit_files`]. Paths are root-relative
+/// `.yaml` files such as `machines/docker1/services/web.yaml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileChange {
+    Write { path: String, content: String },
+    Delete { path: String },
+}
+
+/// Replaces or deletes whole files, for tools that own entire files (such as
+/// `vesper discover`) rather than editing values inside them.
+///
+/// Under the same exclusive lock as the save functions, `plan` receives the
+/// current validated configuration and the text of every file, and returns
+/// the changes together with the configuration they must produce. Nothing is
+/// written unless the edited tree assembles into exactly that configuration;
+/// missing parent directories are created. External edits during the commit
+/// return [`SaveError::Conflict`]. With `dry_run` the edit is verified the
+/// same way but never written, and the root need not be writable.
+pub fn edit_files(
+    root: &Path,
+    dry_run: bool,
+    plan: impl FnOnce(&LoadedConfig, &BTreeMap<String, String>) -> Result<(Vec<FileChange>, Config)>,
+) -> Result<LoadedConfig> {
+    let root = fs::Root::open(root)?;
+    let _lock = root.lock(true)?;
+    let tree = root.scan()?;
+    let current =
+        loaded(&tree).context("the configuration on disk is invalid; fix it before editing")?;
+    let (changes, expected) = plan(&current, &tree.files)?;
+    if changes.is_empty() {
+        return Ok(current);
+    }
+    if !tree.writable && !dry_run {
+        return Err(SaveError::ReadOnly.into());
+    }
+    let mut ops = Vec::new();
+    for change in &changes {
+        let path = match change {
+            FileChange::Write { path, .. } | FileChange::Delete { path } => path,
+        };
+        let parts: Vec<&str> = path.split('/').collect();
+        if !path.ends_with(".yaml")
+            || parts
+                .iter()
+                .any(|p| p.is_empty() || p.starts_with('.') || p.contains('\0'))
+        {
+            bail!("{path}: not a configuration file path");
+        }
+        if tree.dirs.contains(path) {
+            bail!("{path}: is a directory");
+        }
+        match change {
+            FileChange::Write { content, .. } => {
+                for i in 1..parts.len() {
+                    let dir = parts[..i].join("/");
+                    let op = fs::Op::MkDir(dir.clone());
+                    if !tree.dirs.contains(&dir) && !ops.contains(&op) {
+                        ops.push(op);
+                    }
+                }
+                ops.push(fs::Op::Write(path.clone(), content.clone()));
+            }
+            FileChange::Delete { .. } => {
+                if !tree.files.contains_key(path) {
+                    bail!("{path}: cannot delete a file that does not exist");
+                }
+                ops.push(fs::Op::Delete(path.clone()));
+            }
+        }
+    }
+    let mut edited = tree.clone();
+    edited.apply(&ops);
+    edited.check_bounds()?;
+    let next = loaded(&edited)?;
+    if next.config != expected {
+        bail!("the edited files do not produce the planned configuration; nothing was written");
+    }
+    if dry_run {
+        return Ok(next);
+    }
+    root.commit(&tree, &ops)?;
     loaded(&root.scan()?)
 }
 

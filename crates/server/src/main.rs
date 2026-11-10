@@ -64,11 +64,16 @@ async fn main() -> Result<()> {
         .init();
     let command = env::args().nth(1).unwrap_or_else(|| "serve".into());
     if matches!(command.as_str(), "--help" | "-h" | "help") {
-        println!("vesper [serve|validate|export|healthcheck]\nConfiguration: VESPER_CONFIG_DIR (./config)\nData: VESPER_DATA_DIR (./data)\nSecrets: VESPER_SECRETS_DIR (./secrets)\nFrontend: VESPER_STATIC_DIR (./web/dist)\nServe requires VESPER_PUBLIC_URL and VESPER_TRUSTED_PROXIES, or explicit VESPER_DEV_MODE=true.\nSee docs/installation.md for the reverse proxy boundary and optional authentication.");
+        println!("vesper [serve|validate|export|healthcheck|discover]\nOptional Docker label discovery: set VESPER_DISCOVER_DOCKER; see `vesper discover --help`.\nConfiguration: VESPER_CONFIG_DIR (./config)\nData: VESPER_DATA_DIR (./data)\nSecrets: VESPER_SECRETS_DIR (./secrets)\nFrontend: VESPER_STATIC_DIR (./web/dist)\nServe requires VESPER_PUBLIC_URL and VESPER_TRUSTED_PROXIES, or explicit VESPER_DEV_MODE=true.\nSee docs/installation.md for the reverse proxy boundary and optional authentication.");
         return Ok(());
     }
     if command == "healthcheck" {
         return healthcheck();
+    }
+    if command == "discover" {
+        // One reconciliation; `serve` reconciles continuously when enabled.
+        let args: Vec<String> = env::args().skip(2).collect();
+        return vesper_discover::main(&args).await;
     }
     let config_dir = directory("VESPER_CONFIG_DIR", "./config");
     let mut loaded = config::load(&config_dir).context("Configuration could not be loaded")?;
@@ -114,6 +119,18 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(data_dir.join("icons"))?;
     let secrets_dir = directory("VESPER_SECRETS_DIR", "./secrets");
     let config_read_only = env::var("VESPER_CONFIG_READ_ONLY").as_deref() == Ok("true");
+    let discovery = vesper_discover::Settings::from_env()?;
+    if discovery.is_some() && config_read_only {
+        bail!("VESPER_DISCOVER_DOCKER writes generated service files, so it needs writable configuration; unset VESPER_CONFIG_READ_ONLY or VESPER_DISCOVER_DOCKER");
+    }
+    if let Some(settings) = &discovery {
+        // Apply revoked secret grants before any persisted check can run.
+        let outcome = vesper_discover::reconcile_once(settings, false).await?;
+        for line in outcome.report.changes {
+            tracing::info!("discovery: {line}");
+        }
+        loaded = config::load(&config_dir)?;
+    }
     loaded.writable &= !config_read_only;
     let engine = Arc::new(Mutex::new(Engine::open(
         &data_dir.join("vesper.db"),
@@ -133,6 +150,13 @@ async fn main() -> Result<()> {
         security,
     };
     tokio::spawn(vesper_engine::run(engine));
+    if let Some(settings) = discovery {
+        eprintln!("WARNING: Docker label discovery is on ({}). Access to a Docker socket is root-equivalent on that host; see docs/discovery.md.", settings.describe());
+        tokio::spawn(vesper_discover::run(vesper_discover::Settings {
+            config_dir: app.config_dir.clone(),
+            ..settings
+        }));
+    }
     let reload_app = app.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(3));

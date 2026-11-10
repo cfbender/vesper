@@ -8,7 +8,8 @@
 #   - runs as UID:GID 10001:10001, works with a read-only root filesystem,
 #     all capabilities dropped and no-new-privileges
 #   - writable state only in /data (SQLite) and, optionally, /config (YAML)
-#   - secrets mounted read-only at /run/secrets; no Docker socket
+#   - secrets mounted read-only at /run/secrets; no Docker socket unless
+#     optional label discovery is enabled (docs/discovery.md)
 #   - listens on 0.0.0.0:8080 inside a private network; publish no host port
 
 ARG RUST_VERSION=1.93.1
