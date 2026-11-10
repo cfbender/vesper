@@ -1,8 +1,6 @@
 # Vesper
 
-Vesper is a homelab status monitor: one Rust/Axum process with a bundled React UI, SQLite history, YAML as the only configuration authority, and Telegram notifications. It runs HTTP(S), TCP and push-heartbeat checks across your machines and groups them into services and incidents. It runs behind an authenticating reverse proxy. Vesper has no accounts of its own, so every user the proxy admits is an administrator.
-
-**Authelia is optional, not a dependency.** Use your preferred authentication proxy, or HTTPS BasicAuth at the reverse proxy for a small admin-only installation. The [proxy contract](docs/security.md#reverse-proxy-and-authentication-contract) explains the required protections. The runbook provides a Traefik reference path and a recommended Authelia option for SSO/MFA; other proxies can meet the same contract.
+Vesper is a homelab status monitor: one Rust/Axum process with a bundled React UI, SQLite history, YAML as the only configuration authority, and Telegram notifications. It runs HTTP(S), TCP and push-heartbeat checks across your machines and groups them into services and incidents. It runs behind a reverse proxy with optional authentication. **Vesper has no built-in login: without external authentication, anyone who can reach it has full administrator access.**
 
 - **Install:** [docs/installation.md](docs/installation.md) is a step-by-step runbook, written so an agent can follow it. It covers YAML layout, secrets, validation, external authentication, producers, Telegram, drills, the watchdog, upgrades and backups.
 - **Security model:** [docs/security.md](docs/security.md)
@@ -33,7 +31,7 @@ The image runs `vesper serve` by default. Other commands: `vesper validate` chec
 | Variable | Container default | Meaning |
 | --- | --- | --- |
 | `VESPER_PUBLIC_URL` | (required) | Exact `https://` origin users reach, with no path. Used for Origin/CSRF checks and links |
-| `VESPER_TRUSTED_PROXIES` | (none) | Comma-separated CIDRs of the authenticating proxy. Other peers get 403 |
+| `VESPER_TRUSTED_PROXIES` | (none) | Comma-separated CIDRs of the reverse proxy. Other peers get 403 |
 | `VESPER_CONFIG_DIR` | `/config` | YAML root |
 | `VESPER_CONFIG_READ_ONLY` | `false` | `true` makes the UI draft/test/export-only |
 | `VESPER_DATA_DIR` | `/data` | SQLite (`vesper.db`) |

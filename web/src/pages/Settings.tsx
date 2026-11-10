@@ -241,8 +241,9 @@ export function SettingsPage() {
       <section className="card" aria-labelledby="access-title">
         <h2 id="access-title">Access</h2>
         <p>
-          Vesper has no accounts or login. Your authentication proxy protects it, and everyone the proxy
-          admits is an administrator.
+          Warning: Vesper has no built-in login. Authentication at your reverse proxy is optional;
+          without it, anyone who can reach Vesper has full administrator access. Restrict network
+          access or configure authentication. Vesper cannot verify your proxy’s authentication setup.
         </p>
       </section>
 

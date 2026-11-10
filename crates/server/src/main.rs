@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
         .init();
     let command = env::args().nth(1).unwrap_or_else(|| "serve".into());
     if matches!(command.as_str(), "--help" | "-h" | "help") {
-        println!("vesper [serve|validate|export|healthcheck]\nConfiguration: VESPER_CONFIG_DIR (./config)\nData: VESPER_DATA_DIR (./data)\nSecrets: VESPER_SECRETS_DIR (./secrets)\nFrontend: VESPER_STATIC_DIR (./web/dist)\nServe requires VESPER_PUBLIC_URL and VESPER_TRUSTED_PROXIES, or explicit VESPER_DEV_MODE=true.\nSee docs/installation.md for the authentication proxy boundary.");
+        println!("vesper [serve|validate|export|healthcheck]\nConfiguration: VESPER_CONFIG_DIR (./config)\nData: VESPER_DATA_DIR (./data)\nSecrets: VESPER_SECRETS_DIR (./secrets)\nFrontend: VESPER_STATIC_DIR (./web/dist)\nServe requires VESPER_PUBLIC_URL and VESPER_TRUSTED_PROXIES, or explicit VESPER_DEV_MODE=true.\nSee docs/installation.md for the reverse proxy boundary and optional authentication.");
         return Ok(());
     }
     if command == "healthcheck" {
@@ -149,7 +149,8 @@ async fn main() -> Result<()> {
     });
     let router = api::router(app);
     let listener = tokio::net::TcpListener::bind(listen).await?;
-    eprintln!("Vesper listening on {listen}; authentication is delegated to the configured proxy.");
+    eprintln!("Vesper listening on {listen}.");
+    eprintln!("WARNING: Vesper has no built-in authentication. Without authentication at your reverse proxy, anyone who can reach Vesper has full administrator access. Vesper cannot verify your proxy's authentication configuration.");
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<SocketAddr>(),

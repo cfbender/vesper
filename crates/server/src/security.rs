@@ -58,7 +58,7 @@ impl Security {
             })
             .collect::<Result<Vec<_>>>()?;
         if !dev_mode && trusted_proxies.is_empty() {
-            bail!("Set VESPER_TRUSTED_PROXIES to the authentication proxy's private address CIDRs; no dashboard bypass is permitted");
+            bail!("Set VESPER_TRUSTED_PROXIES to the reverse proxy's private address CIDRs");
         }
         let mut bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut bytes);
@@ -96,7 +96,7 @@ pub async fn protect(State(app): State<App>, request: Request, next: Next) -> Re
             .get::<ConnectInfo<SocketAddr>>()
             .map(|info| info.0.ip());
         if !peer.is_some_and(|ip| app.security.trusts(ip)) {
-            return denied("Access requires the configured authentication proxy");
+            return denied("Access requires the configured reverse proxy");
         }
         if request
             .headers()
